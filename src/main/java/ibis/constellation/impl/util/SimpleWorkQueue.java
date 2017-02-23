@@ -34,7 +34,7 @@ public class SimpleWorkQueue extends WorkQueue {
         SortedRangeList tmp = lists.get(c.getName());
 
         if (tmp == null) {
-            tmp = new SortedRangeList(c.getName());
+            tmp = new SimpleSortedRangeList(c.getName());
             lists.put(c.getName(), tmp);
         }
 
