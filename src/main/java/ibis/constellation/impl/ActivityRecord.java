@@ -26,7 +26,7 @@ public class ActivityRecord implements Serializable, ByteBuffers {
     private static final int DONE = 5;
     private static final int ERROR = Integer.MAX_VALUE;
 
-    private final Activity activity;
+    private final ActivityWrapper activityWrapper;
     private final ActivityIdentifierImpl identifier;
 
     private final AbstractContext context;
@@ -41,7 +41,7 @@ public class ActivityRecord implements Serializable, ByteBuffers {
     private boolean remote = false;
 
     ActivityRecord(Activity activity, ActivityIdentifierImpl id) {
-        this.activity = activity;
+        this.activityWrapper = new ActivityWrapper(activity, id);
         this.identifier = id;
         this.context = activity.getContext();
         this.mayBeStolen = activity.mayBeStolen();
@@ -52,12 +52,16 @@ public class ActivityRecord implements Serializable, ByteBuffers {
             queue = null;
         }
     }
+    
+    public boolean persistActivity() {
+    	return activityWrapper.persistActivity();
+    }
 
     public void enqueue(Event e) {
 
         if (state >= FINISHING) {
             throw new IllegalStateException(
-                    "Cannot deliver an event to a finished activity! " + activity + " (event from " + e.getSource() + ")");
+                    "Cannot deliver an event to a finished activity! " + activityWrapper.getActivity() + " (event from " + e.getSource() + ")");
         }
 
         queue.insertLast(e);
@@ -148,6 +152,7 @@ public class ActivityRecord implements Serializable, ByteBuffers {
     private final void runStateMachine(Constellation c) {
         try {
             int nextState;
+            Activity activity = activityWrapper.getActivity();
 
             switch (state) {
 
@@ -243,7 +248,7 @@ public class ActivityRecord implements Serializable, ByteBuffers {
 
     @Override
     public String toString() {
-        return activity + " STATE: " + getStateAsString() + " " + "event queue size = " + (queue == null ? 0 : queue.size());
+        return activityWrapper.getActivity() + " STATE: " + getStateAsString() + " " + "event queue size = " + (queue == null ? 0 : queue.size());
     }
 
     public AbstractContext getContext() {
@@ -255,6 +260,9 @@ public class ActivityRecord implements Serializable, ByteBuffers {
         if (queue != null) {
             queue.pushByteBuffers(list);
         }
+        
+        Activity activity = activityWrapper.getActivity();
+        
         if (activity != null && activity instanceof ByteBuffers) {
             ((ByteBuffers) activity).pushByteBuffers(list);
         }
@@ -265,6 +273,9 @@ public class ActivityRecord implements Serializable, ByteBuffers {
         if (queue != null) {
             queue.popByteBuffers(list);
         }
+        
+        Activity activity = activityWrapper.getActivity();
+        
         if (activity != null && activity instanceof ByteBuffers) {
             ((ByteBuffers) activity).popByteBuffers(list);
         }
