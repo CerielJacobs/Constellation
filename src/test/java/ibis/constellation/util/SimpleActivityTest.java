@@ -187,7 +187,7 @@ public class SimpleActivityTest {
         Constellation c = createConstellation();
         c.activate();
 
-        FakeActivity a = new FakeActivity(null, new Context("A", 0, 0));
+        FakeActivity a = new FakeActivity(null, new Context("A", 0, 0), false);
 
         ActivityIdentifier id = c.submit(a);
 

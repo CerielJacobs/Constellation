@@ -9,7 +9,7 @@ public class SimpleQueue implements Queue {
 	
 	private static final Logger logger = LoggerFactory.getLogger(SimpleQueue.class);
 	
-	// If the free memory to max memory ratio is found to be below this threshold, then
+	// If the free memory to total memory ratio is found to be below this threshold, then
 	// the newly enqueued activity will be persisted to disk.
 	private static final double FREE_MEMORY_RATIO_THRESHOLD = 0.2;
 	
@@ -48,13 +48,13 @@ public class SimpleQueue implements Queue {
 		
 		size++;
 		
-		double freeRatio = (double) Runtime.getRuntime().freeMemory() / Runtime.getRuntime().maxMemory();
+		double freeRatio = (double) Runtime.getRuntime().freeMemory() / Runtime.getRuntime().totalMemory();
 		if (freeRatio < FREE_MEMORY_RATIO_THRESHOLD) {
 			a.persistActivity();
 			
 			if (logger.isDebugEnabled()) {
 				logger.debug("Activity " + a.identifier() + " persisted to disk");
-			}			
+			}
 		}
 	}
 

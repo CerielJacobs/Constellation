@@ -43,6 +43,12 @@ public class ActivityWrapper {
 	
 	public boolean persistActivity() {
 		
+		if (!activity.mayBeStolen()) {
+			// some thread may access this instance
+			// so it should not be flushed to disk
+			return false;
+		}
+		
 		File file = new File(System.getProperty("java.io.tmpdir") + "/" + identifier.toString());
 		
 		try {
@@ -121,6 +127,7 @@ public class ActivityWrapper {
             }
 			
 			ois.close();
+			file.delete();
 		} catch (IOException | ClassNotFoundException e) {
 			e.printStackTrace();
 			return false;
