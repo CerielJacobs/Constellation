@@ -22,10 +22,12 @@ public class ActivityWrapper {
 	
 	private Activity activity;
 	private final ActivityIdentifierImpl identifier;
+	private final File file;
 	
 	public ActivityWrapper(Activity activity, ActivityIdentifierImpl id) {
 		this.activity = activity;
         this.identifier = id;
+        this.file = new File(System.getProperty("java.io.tmpdir") + "/" + identifier.toString());
 	}
 	
 	public Activity getActivity() {
@@ -48,8 +50,6 @@ public class ActivityWrapper {
 			// so it should not be flushed to disk
 			return false;
 		}
-		
-		File file = new File(System.getProperty("java.io.tmpdir") + "/" + identifier.toString());
 		
 		try {
 			file.delete();
@@ -92,8 +92,6 @@ public class ActivityWrapper {
 	}
 	
 	private boolean retrieveActivity() {
-		
-		File file = new File(System.getProperty("java.io.tmpdir") + "/" + identifier.toString());
 		
 		try {
 			ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file));
