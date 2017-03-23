@@ -1,7 +1,5 @@
 package ibis.constellation.impl;
 
-import java.util.HashMap;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,6 +15,7 @@ import ibis.constellation.Event;
 import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
+import ibis.constellation.impl.util.ActivityRecordCache;
 import ibis.constellation.impl.util.CircularBuffer;
 import ibis.constellation.impl.util.SimpleWorkQueue;
 import ibis.constellation.impl.util.WorkQueue;
@@ -42,14 +41,14 @@ public class ExecutorWrapper implements Constellation {
 
     private final StealPool myPool;
     private final StealPool stealsFrom;
-
-    private HashMap<ActivityIdentifier, ActivityRecord> lookup = new HashMap<ActivityIdentifier, ActivityRecord>();
+    
+    private ActivityRecordCache cache;
 
     private final WorkQueue restricted;
     private final WorkQueue fresh;
 
-    private CircularBuffer<ActivityRecord> runnable = new CircularBuffer<ActivityRecord>(1);
-    private CircularBuffer<ActivityRecord> relocated = new CircularBuffer<ActivityRecord>(1);
+    private CircularBuffer<ActivityIdentifier> runnable = new CircularBuffer<ActivityIdentifier>(1);
+    private CircularBuffer<ActivityIdentifier> relocated = new CircularBuffer<ActivityIdentifier>(1);
 
     private long activityCounter = 0;
 
@@ -80,6 +79,8 @@ public class ExecutorWrapper implements Constellation {
         this.localStealStrategy = config.getLocalStealStrategy();
         this.constellationStealStrategy = config.getConstellationStealStrategy();
         this.remoteStealStrategy = config.getRemoteStealStrategy();
+        
+        cache = new ActivityRecordCache(identifier.toString() + ":WRAPPER");	
 
         QUEUED_JOB_LIMIT = p.QUEUED_JOB_LIMIT;
 
@@ -102,22 +103,23 @@ public class ExecutorWrapper implements Constellation {
 
     private void cancel(ActivityIdentifier activityIdentifier) {
 
-        ActivityRecord ar = lookup.remove(activityIdentifier);
+        ActivityRecord ar = cache.get(activityIdentifier);
+        cache.remove(activityIdentifier);
 
         if (ar == null) {
             return;
         }
 
         if (ar.needsToRun()) {
-            runnable.remove(ar);
+            runnable.remove(ar.identifier());
         }
     }
 
     @Override
     public void done() {
-        if (lookup.size() > 0) {
-            logger.warn("Quiting Constellation with " + lookup.size() + " activities in queue");
-        }
+//        if (lookup.size() > 0) {
+//            logger.warn("Quiting Constellation with " + lookup.size() + " activities in queue");
+//        }
         parent.performDone();
     }
 
@@ -129,14 +131,14 @@ public class ExecutorWrapper implements Constellation {
         int size = runnable.size();
 
         if (size > 0) {
-            return runnable.removeFirst();
+            return cache.get(runnable.removeFirst());
         }
 
         // Next see if we have any relocated activities.
         size = relocated.size();
 
         if (size > 0) {
-            return relocated.removeFirst();
+            return cache.get(relocated.removeFirst());
         }
 
         // Next see if there are any activities that cannot
@@ -144,14 +146,14 @@ public class ExecutorWrapper implements Constellation {
         size = restricted.size();
 
         if (size > 0) {
-            return restricted.steal(myContext, localStealStrategy);
+            return cache.get(restricted.steal(myContext, localStealStrategy));
         }
 
         // Finally, see if there are any fresh activities.
         size = fresh.size();
 
         if (size > 0) {
-            return fresh.steal(myContext, localStealStrategy);
+            return cache.get(fresh.steal(myContext, localStealStrategy));
         }
 
         return null;
@@ -162,8 +164,8 @@ public class ExecutorWrapper implements Constellation {
         // it is relocated, or because we have just obtained it and we don't
         // want anyone else to steal it from us.
 
-        lookup.put(a.identifier(), a);
-        relocated.insertLast(a);
+    	cache.put(a.identifier(), a);
+        relocated.insertLast(a.identifier());
     }
 
     private synchronized ActivityIdentifierImpl createActivityID(boolean events) {
@@ -203,7 +205,7 @@ public class ExecutorWrapper implements Constellation {
             return parent.doSubmit(ar, activity.getContext(), id);
         }
 
-        lookup.put(id, ar);
+        cache.put(id, ar);
 
         if (ar.isRestrictedToLocal()) {
             if (logger.isDebugEnabled()) {
@@ -243,7 +245,7 @@ public class ExecutorWrapper implements Constellation {
         // First check if the activity is local.
         ActivityRecord ar;
 
-        ar = lookup.get(target);
+        ar = cache.get(target);
         if (ar != null) {
             messagesInternal++;
         } else {
@@ -256,9 +258,10 @@ public class ExecutorWrapper implements Constellation {
             boolean change = ar.setRunnable();
 
             if (change) {
-                runnable.insertLast(ar);
+                runnable.insertLast(ar.identifier());
             }
-
+            
+            cache.put(target, ar);
         } else {
             // Activity is not local, so let our parent handle it.
             parent.handleEvent(e);
@@ -271,7 +274,7 @@ public class ExecutorWrapper implements Constellation {
 
     public boolean queueEvent(Event e) {
 
-        ActivityRecord ar = lookup.get(e.getTarget());
+    	ActivityRecord ar = cache.get(e.getTarget());
 
         if (ar != null) {
 
@@ -280,9 +283,10 @@ public class ExecutorWrapper implements Constellation {
             boolean change = ar.setRunnable();
 
             if (change) {
-                runnable.insertLast(ar);
+                runnable.insertLast(ar.identifier());
             }
-
+            
+            cache.put(e.getTarget(), ar);
             return true;
         }
 
@@ -297,32 +301,37 @@ public class ExecutorWrapper implements Constellation {
         steals++;
 
         ActivityRecord[] result = new ActivityRecord[count];
+        ActivityIdentifier[] identifiers = new ActivityIdentifier[count];
 
         if (logger.isTraceEnabled()) {
+//            logger.trace("STEAL BASE(" + identifier + "): activities F: " + fresh.size() + " W: "
+//                    + /* wrongContext.size() + */" R: " + runnable.size() + " L: " + lookup.size());
             logger.trace("STEAL BASE(" + identifier + "): activities F: " + fresh.size() + " W: "
-                    + /* wrongContext.size() + */" R: " + runnable.size() + " L: " + lookup.size());
+                    + /* wrongContext.size() + */" R: " + runnable.size());
         }
 
         int r = 0;
 
         if (allowRestricted) {
-            r = restricted.steal(context, s, result, 0, count);
+            r = restricted.steal(context, s, identifiers, 0, count);
         }
         if (r < count) {
-            r += fresh.steal(context, s, result, r, count - r);
+            r += fresh.steal(context, s, identifiers, r, count - r);
         }
 
         if (r != 0) {
             for (int i = 0; i < r; i++) {
+            	result[i] = cache.get(identifiers[i]);
+            	
                 if (result[i].isStolen()) {
                     // Sanity check, should not happen.
                     logger.warn("INTERNAL ERROR: return stolen job " + identifier);
                 }
 
-                lookup.remove(result[i].identifier());
+                cache.remove(identifiers[i]);
 
                 if (logger.isTraceEnabled()) {
-                    logger.trace("STOLEN " + result[i].identifier());
+                    logger.trace("STOLEN " + identifiers[i]);
                 }
             }
             stolenJobs += r;
@@ -346,9 +355,12 @@ public class ExecutorWrapper implements Constellation {
         if (PROFILE) {
             timer.stop(evt);
         }
-
+        
+        
+        cache.put(tmp.identifier(), tmp);
+        
         if (tmp.needsToRun()) {
-            runnable.insertFirst(tmp);
+            runnable.insertFirst(tmp.identifier());
         } else if (tmp.isDone()) {
             cancel(tmp.identifier());
         }

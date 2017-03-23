@@ -16,6 +16,8 @@
 
 package ibis.constellation;
 
+import java.io.Serializable;
+
 /**
  * An <code>ActivityIdentifier</code> uniquely identifies an {@link Activity} instance. The only valid ActivityIdentifiers are
  * those returned from the constellation system. In other words, it is not possible to create your own activity identifiers.
@@ -23,7 +25,7 @@ package ibis.constellation;
  * @version 1.0
  * @since 1.0
  */
-public interface ActivityIdentifier {
+public interface ActivityIdentifier extends Serializable {
 
     @Override
     public String toString();

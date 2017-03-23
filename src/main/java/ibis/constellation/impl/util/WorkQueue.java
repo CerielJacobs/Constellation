@@ -1,6 +1,7 @@
 package ibis.constellation.impl.util;
 
 import ibis.constellation.AbstractContext;
+import ibis.constellation.ActivityIdentifier;
 import ibis.constellation.StealStrategy;
 import ibis.constellation.impl.ActivityRecord;
 
@@ -14,7 +15,7 @@ public abstract class WorkQueue {
 
     public abstract void enqueue(ActivityRecord a);
 
-    public abstract ActivityRecord steal(AbstractContext c, StealStrategy s);
+    public abstract ActivityIdentifier steal(AbstractContext c, StealStrategy s);
 
     public abstract int size();
 
@@ -25,7 +26,7 @@ public abstract class WorkQueue {
     }
 
     // TODO: fix steal to allow multiple in one go!
-    public int steal(AbstractContext c, StealStrategy s, ActivityRecord[] dst, int off, int len) {
+    public int steal(AbstractContext c, StealStrategy s, ActivityIdentifier[] dst, int off, int len) {
 
         for (int i = off; i < off + len; i++) {
             dst[i] = steal(c, s);

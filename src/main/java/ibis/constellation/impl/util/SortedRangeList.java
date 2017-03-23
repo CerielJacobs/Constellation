@@ -3,7 +3,7 @@ package ibis.constellation.impl.util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import ibis.constellation.impl.ActivityRecord;
+import ibis.constellation.ActivityIdentifier;
 
 public class SortedRangeList {
 
@@ -16,9 +16,9 @@ public class SortedRangeList {
         private final long start;
         private final long end;
         
-        private final ActivityRecord data;
+        private final ActivityIdentifier data;
 
-        Node(ActivityRecord data, long start, long end) {
+        Node(ActivityIdentifier data, long start, long end) {
             this.data = data;
             this.start = start;
             this.end = end;
@@ -38,9 +38,9 @@ public class SortedRangeList {
         size = 0;
     }
 
-    public void insert(ActivityRecord a, long start, long end) {
+    public void insert(ActivityIdentifier id, long start, long end) {
 
-        Node n = new Node(a, start, end);
+        Node n = new Node(id, start, end);
 
         Node current = head.next;
 
@@ -62,7 +62,7 @@ public class SortedRangeList {
         }
     }
 
-    public ActivityRecord removeHead() {
+    public ActivityIdentifier removeHead() {
 
         if (size == 0) {
             return null;
@@ -76,7 +76,7 @@ public class SortedRangeList {
         return v.data;
     }
 
-    public ActivityRecord removeTail() {
+    public ActivityIdentifier removeTail() {
 
         if (size == 0) {
             return null;
@@ -94,7 +94,7 @@ public class SortedRangeList {
         return size;
     }
 
-    public boolean removeByReference(ActivityRecord o) {
+    public boolean removeByReference(ActivityIdentifier o) {
 
         Node current = head.next;
 
@@ -114,7 +114,7 @@ public class SortedRangeList {
         return false;
     }
 
-    public ActivityRecord removeSmallestInRange(long start, long end) {
+    public ActivityIdentifier removeSmallestInRange(long start, long end) {
 
         Node current = head.next;
 
@@ -138,7 +138,7 @@ public class SortedRangeList {
         return current.data;
     }
 
-    public ActivityRecord removeBiggestInRange(long start, long end) {
+    public ActivityIdentifier removeBiggestInRange(long start, long end) {
 
         Node current = tail.prev;
 

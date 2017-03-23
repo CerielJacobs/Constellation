@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import ibis.constellation.AbstractContext;
+import ibis.constellation.ActivityIdentifier;
 import ibis.constellation.OrContext;
 import ibis.constellation.Context;
 import ibis.constellation.StealStrategy;
@@ -38,7 +39,7 @@ public class SimpleWorkQueue extends WorkQueue {
             lists.put(c.getName(), tmp);
         }
 
-        tmp.insert(a, c.getRangeStart(), c.getRangeEnd());
+        tmp.insert(a.identifier(), c.getRangeStart(), c.getRangeEnd());
         size++;
     }
     
@@ -60,7 +61,7 @@ public class SimpleWorkQueue extends WorkQueue {
         }
     }
     
-    private ActivityRecord stealRange(Context c, StealStrategy s) {
+    private ActivityIdentifier stealRange(Context c, StealStrategy s) {
         
         if (log.isDebugEnabled()) {
             log.debug("Matching context: " + c  + " (len = " + lists.size() + ")");
@@ -80,27 +81,27 @@ public class SimpleWorkQueue extends WorkQueue {
             log.debug("SortedRangeList == " + tmp.size());
         }
         
-        ActivityRecord r = null;
+        ActivityIdentifier id = null;
         
         if (StealStrategy.BIGGEST.equals(s)) { 
-            r = tmp.removeBiggestInRange(c.getRangeStart(), c.getRangeEnd());
+            id = tmp.removeBiggestInRange(c.getRangeStart(), c.getRangeEnd());
         } else { 
-            r = tmp.removeSmallestInRange(c.getRangeStart(), c.getRangeEnd());
+            id = tmp.removeSmallestInRange(c.getRangeStart(), c.getRangeEnd());
         }
         
         if (log.isDebugEnabled()) {
-            log.debug(" steal == " + r);
+            log.debug(" steal == " + id);
         }
 
-        if (r != null) { 
+        if (id != null) { 
             size--;
         }
         
-        return r;
+        return id;
         
     }
     
-    private boolean removeByReference(Context c, ActivityRecord r) {
+    private boolean removeByReference(Context c, ActivityIdentifier id) {
         
         SortedRangeList tmp = lists.get(c.getName());
 
@@ -108,12 +109,12 @@ public class SimpleWorkQueue extends WorkQueue {
             return false;
         }
         
-        return tmp.removeByReference(r);
+        return tmp.removeByReference(id);
     }
     
-    private ActivityRecord stealOr(OrContext c, StealStrategy s) {
+    private ActivityIdentifier stealOr(OrContext c, StealStrategy s) {
         
-        ActivityRecord tmp = null;
+        ActivityIdentifier tmp = null;
         
         Iterator<Context> itt = c.iterator();
 
@@ -134,7 +135,7 @@ public class SimpleWorkQueue extends WorkQueue {
     
     
     @Override
-    public synchronized ActivityRecord steal(AbstractContext c, StealStrategy s) {
+    public synchronized ActivityIdentifier steal(AbstractContext c, StealStrategy s) {
 
         if (c instanceof Context) {
             return stealRange((Context) c, s);

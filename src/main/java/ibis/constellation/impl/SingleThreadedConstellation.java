@@ -24,6 +24,7 @@ import ibis.constellation.Event;
 import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
+import ibis.constellation.impl.util.ActivityRecordCache;
 import ibis.constellation.impl.util.CircularBuffer;
 import ibis.constellation.impl.util.SimpleWorkQueue;
 import ibis.constellation.impl.util.Stats;
@@ -64,10 +65,11 @@ public class SingleThreadedConstellation extends Thread {
     private final WorkQueue restrictedWrongContext;
 
     // Work that is relocated. Only our local executor may run it.
-    private final CircularBuffer<ActivityRecord> relocated = new CircularBuffer<ActivityRecord>(1);
+    private final CircularBuffer<ActivityIdentifier> relocated = new CircularBuffer<ActivityIdentifier>(1);
 
     // Hashmap allowing quick lookup of the activities in our 4 queues.
-    private HashMap<ActivityIdentifierImpl, ActivityRecord> lookup = new HashMap<ActivityIdentifierImpl, ActivityRecord>();
+    
+    private ActivityRecordCache cache;
 
     private final ConstellationIdentifierImpl identifier;
 
@@ -131,7 +133,7 @@ public class SingleThreadedConstellation extends Thread {
 
         if (props == null) {
             throw new IllegalArgumentException("SingleThreadedConstellation expects ConstellationProperties");
-        }
+        }	
 
         PROFILE_STEALS = props.PROFILE_STEAL;
         PRINT_STATISTICS = props.PRINT_STATISTICS;
@@ -210,7 +212,8 @@ public class SingleThreadedConstellation extends Thread {
 
         myPool = wrapper.belongsTo();
         stealPool = wrapper.stealsFrom();
-
+        
+        cache = new ActivityRecordCache(identifier.toString() + ":STC");
     }
 
     public void setRank(int rank) {
@@ -265,7 +268,7 @@ public class SingleThreadedConstellation extends Thread {
         if (ContextMatch.match(c, wrapper.getContext())) {
 
             synchronized (this) {
-                lookup.put(ar.identifier(), ar);
+                cache.put(ar.identifier(), ar);
 
                 if (ar.isRestrictedToLocal()) {
                     if (logger.isDebugEnabled()) {
@@ -329,14 +332,14 @@ public class SingleThreadedConstellation extends Thread {
         }
     }
 
-    private ActivityRecord[] trim(ActivityRecord[] a, int count) {
+    private ActivityIdentifier[] trim(ActivityIdentifier[] a, int count) {
         if (a.length > count) {
             return Arrays.copyOf(a, count);
         }
         return a;
     }
 
-    private int localSteal(AbstractContext context, StealStrategy s, ActivityRecord[] result, int o, int size) {
+    private int localSteal(AbstractContext context, StealStrategy s, ActivityIdentifier[] result, int o, int size) {
         int offset = o;
         if (offset < size) {
             offset += restrictedWrongContext.steal(context, s, result, offset, size - offset);
@@ -362,6 +365,7 @@ public class SingleThreadedConstellation extends Thread {
         }
 
         ActivityRecord[] result = new ActivityRecord[size];
+        ActivityIdentifier[] identifiers = new ActivityIdentifier[size];
 
         // sanity check
         if (src.equals(identifier)) {
@@ -375,19 +379,19 @@ public class SingleThreadedConstellation extends Thread {
         }
 
         // First steal from the activities that I cannot run myself.
-        int fromWrong = wrongContext.steal(context, s, result, 0, size);
+        int fromWrong = wrongContext.steal(context, s, identifiers, 0, size);
         int offset = fromWrong;
 
         if (local && offset < size) {
             // Only peers from our own constellation are allowed to steal
             // restricted or stolen jobs.
-            offset = localSteal(context, s, result, offset, size);
+            offset = localSteal(context, s, identifiers, offset, size);
         }
 
         // Anyone may steal a fresh job
         int fromFresh = 0;
         if (offset < size) {
-            fromFresh = fresh.steal(context, s, result, offset, size - offset);
+            fromFresh = fresh.steal(context, s, identifiers, offset, size - offset);
             offset += fromFresh;
         }
 
@@ -399,9 +403,13 @@ public class SingleThreadedConstellation extends Thread {
             logger.debug("Stole jobs from " + identifier + ": " + fromWrong + " from wrongContext, " + fromFresh + " from fresh");
         }
 
-        result = trim(result, offset);
+        identifiers = trim(identifiers, offset);
+        
+        for (int i = 0; i < offset; i++) {
+        	result[i] = cache.get(identifiers[i]);
+        }
 
-        // Next, remove activities from lookup, and mark and register them as
+        // Next, remove activities from cache, and mark and register them as
         // relocated or stolen/exported
         registerLeavingActivities(result, offset, src, local);
 
@@ -413,7 +421,7 @@ public class SingleThreadedConstellation extends Thread {
 
         for (int i = 0; i < len; i++) {
             if (ar[i] != null) {
-                lookup.remove(ar[i].identifier());
+            	cache.remove(ar[i].identifier());
 
                 if (isLocal) {
                     ar[i].setRelocated(true);
@@ -436,9 +444,9 @@ public class SingleThreadedConstellation extends Thread {
 
     private synchronized boolean pushWorkFromQueue(WorkQueue queue, StealStrategy s) {
         if (queue.size() > 0) {
-            ActivityRecord ar = queue.steal(wrapper.getContext(), s);
-            if (ar != null) {
-                lookup.remove(ar.identifier());
+            ActivityIdentifier identifier = queue.steal(wrapper.getContext(), s);
+            if (identifier != null) {
+            	ActivityRecord ar = cache.remove(identifier);
                 wrapper.addPrivateActivity(ar);
                 return true;
             }
@@ -454,8 +462,8 @@ public class SingleThreadedConstellation extends Thread {
                 logger.debug("Found work on relocated list: " + relocated.size() + " jobs");
             }
             while (relocated.size() > 0) {
-                ActivityRecord ar = relocated.removeFirst();
-                lookup.remove(ar.identifier());
+                ActivityIdentifier identifier = relocated.removeFirst();
+                ActivityRecord ar = cache.remove(identifier);
                 wrapper.addPrivateActivity(ar);
             }
 
@@ -494,13 +502,14 @@ public class SingleThreadedConstellation extends Thread {
                     // this executor.
 
                     // Timo: Add it to lookup as well!
-                    lookup.put(a.identifier(), a);
+                	
+                    cache.put(a.identifier(), a);
                     if (a.isRelocated()) {
                         if (logger.isDebugEnabled()) {
                             logger.debug("Putting " + a.identifier().toString() + " on relocated list of "
                                     + this.identifier().toString());
                         }
-                        relocated.insertLast(a);
+                        relocated.insertLast(a.identifier());
                     } else {
                         stolen.enqueue(a);
                     }
@@ -532,11 +541,12 @@ public class SingleThreadedConstellation extends Thread {
         Event e = m.event;
         ActivityIdentifierImpl target = (ActivityIdentifierImpl) e.getTarget();
 
-        ActivityRecord tmp = lookup.get(target);
+        ActivityRecord tmp = cache.get(target);
 
         if (tmp != null) {
             // We found the destination activity and enqueue the event for it.
             tmp.enqueue(e);
+            cache.put(target, tmp);
             return null;
         }
 
@@ -574,11 +584,12 @@ public class SingleThreadedConstellation extends Thread {
         synchronized (this) {
 
             // See if the activity is in one of our queues
-            ActivityRecord tmp = lookup.get(e.getTarget());
+            ActivityRecord tmp = cache.get(e.getTarget());
 
             if (tmp != null) {
                 // It is, so enqueue it and return.
                 tmp.enqueue(e);
+                cache.put(e.getTarget(), tmp);
                 return;
             }
 
@@ -702,7 +713,7 @@ public class SingleThreadedConstellation extends Thread {
                 if (ar.isRelocated()) {
                     // We should unset the relocation flag if an activity is returned.
                     ar.setRelocated(false);
-                    relocated.remove(ar);
+                    relocated.remove(ar.identifier());
                 } else if (ar.isStolen()) {
                     // We should unset the stolen flag if an activity is returned.
                     ar.setStolen(false);
@@ -712,7 +723,7 @@ public class SingleThreadedConstellation extends Thread {
                 if (ContextMatch.match(c, wrapper.getContext())) {
 
                     synchronized (this) {
-                        lookup.put(ar.identifier(), ar);
+                        cache.put(ar.identifier(), ar);
 
                         if (ar.isRestrictedToLocal()) {
                             restricted.enqueue(ar);
@@ -826,7 +837,7 @@ public class SingleThreadedConstellation extends Thread {
 
     public synchronized void deliverWrongContext(ActivityRecord a) {
         // Timo: we should add it to the lookup as well
-        lookup.put(a.identifier(), a);
+        cache.put(a.identifier(), a);
 
         if (a.isRestrictedToLocal()) {
             restrictedWrongContext.enqueue(a);
