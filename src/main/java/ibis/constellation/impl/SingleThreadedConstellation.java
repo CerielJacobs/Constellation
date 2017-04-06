@@ -198,7 +198,6 @@ public class SingleThreadedConstellation extends Thread {
         }
 
         if (parent != null) {
-            parent.register(this);
             profiling = parent.getProfiling();
         } else {
             profiling = new Profiling(identifier.toString());
