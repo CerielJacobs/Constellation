@@ -437,11 +437,13 @@ public class ActivityRecord implements Serializable, ByteBuffers {
         oos.defaultWriteObject();
     }
 
-    @Override
-    protected void finalize() throws Throwable {
-        File file = new File(System.getProperty("java.io.tmpdir") + "/" + identifier.toString());
-        file.delete();
-    }
+    // Severe performance penalty if enabled
+
+    //    @Override
+    //    protected void finalize() throws Throwable {
+    //        File file = new File(tempDir + File.separator + identifier.toString());
+    //        file.delete();
+    //    }
 
     //    public Activity getActivity() {
     //        return activity;
