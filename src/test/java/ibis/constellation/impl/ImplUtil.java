@@ -43,13 +43,13 @@ public class ImplUtil {
 
     public static ActivityRecord createActivityRecord() {
         FakeActivity t = new FakeActivity();
-        return new ActivityRecord(t, (ActivityIdentifierImpl)createActivityIdentifier(0,  0,  0, true));
+        return new ActivityRecord(t, (ActivityIdentifierImpl)createActivityIdentifier(0,  0,  0, true), 0.0);
     }
     
 
     public static ActivityRecord createActivityRecord(AbstractContext c) {
         FakeActivity t = new FakeActivity(c);
-        return new ActivityRecord(t, (ActivityIdentifierImpl) createActivityIdentifier(0, 0, 0, true));
+        return new ActivityRecord(t, (ActivityIdentifierImpl) createActivityIdentifier(0, 0, 0, true), 0.0);
     }
     
 }

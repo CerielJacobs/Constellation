@@ -1,7 +1,19 @@
 package ibis.constellation.impl;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -9,6 +21,7 @@ import org.slf4j.LoggerFactory;
 
 import ibis.constellation.AbstractContext;
 import ibis.constellation.Activity;
+import ibis.constellation.ByteBufferCache;
 import ibis.constellation.ByteBuffers;
 import ibis.constellation.Constellation;
 import ibis.constellation.Event;
@@ -19,6 +32,8 @@ public class ActivityRecord implements Serializable, ByteBuffers {
     private static final Logger logger = LoggerFactory.getLogger(ActivityRecord.class);
     private static final long serialVersionUID = 6938326535791839797L;
 
+    private static final Path tempDir;
+
     private static final int INITIALIZING = 1;
     private static final int SUSPENDED = 2;
     private static final int RUNNABLE = 3;
@@ -26,7 +41,7 @@ public class ActivityRecord implements Serializable, ByteBuffers {
     private static final int DONE = 5;
     private static final int ERROR = Integer.MAX_VALUE;
 
-    private final ActivityWrapper activityWrapper;
+    private Activity activity;
     private final ActivityIdentifierImpl identifier;
 
     private final AbstractContext context;
@@ -40,8 +55,26 @@ public class ActivityRecord implements Serializable, ByteBuffers {
     private boolean relocated = false;
     private boolean remote = false;
 
-    ActivityRecord(Activity activity, ActivityIdentifierImpl id) {
-        this.activityWrapper = new ActivityWrapper(activity, id);
+    static {
+        Path temp = null;
+
+        try {
+            temp = Files.createTempDirectory("Constellation");
+            new File(temp.toString()).deleteOnExit();
+
+            if (logger.isDebugEnabled()) {
+                logger.debug("Created temp directory: " + temp);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+            temp = Paths.get(System.getProperty("java.io.tmpdir"));
+        } finally {
+            tempDir = temp;
+        }
+    }
+
+    ActivityRecord(Activity activity, ActivityIdentifierImpl id, double memoryThreshold) {
+        this.activity = activity;
         this.identifier = id;
         this.context = activity.getContext();
         this.mayBeStolen = activity.mayBeStolen();
@@ -51,17 +84,22 @@ public class ActivityRecord implements Serializable, ByteBuffers {
         } else {
             queue = null;
         }
-    }
-    
-    public boolean persistActivity() {
-    	return activityWrapper.persistActivity();
+
+        double freeRatio = (double) Runtime.getRuntime().freeMemory() / Runtime.getRuntime().totalMemory();
+        if (freeRatio < memoryThreshold) {
+            persistActivity();
+        }
     }
 
     public void enqueue(Event e) {
 
         if (state >= FINISHING) {
+            if (activity == null) {
+                retrieveActivity();
+            }
+
             throw new IllegalStateException(
-                    "Cannot deliver an event to a finished activity! " + activityWrapper.getActivity() + " (event from " + e.getSource() + ")");
+                    "Cannot deliver an event to a finished activity! " + activity + " (event from " + e.getSource() + ")");
         }
 
         queue.insertLast(e);
@@ -152,7 +190,9 @@ public class ActivityRecord implements Serializable, ByteBuffers {
     private final void runStateMachine(Constellation c) {
         try {
             int nextState;
-            Activity activity = activityWrapper.getActivity();
+            if (activity == null) {
+                retrieveActivity();
+            }
 
             switch (state) {
 
@@ -248,7 +288,11 @@ public class ActivityRecord implements Serializable, ByteBuffers {
 
     @Override
     public String toString() {
-        return activityWrapper.getActivity() + " STATE: " + getStateAsString() + " " + "event queue size = " + (queue == null ? 0 : queue.size());
+        if (activity == null) {
+            retrieveActivity();
+        }
+
+        return activity + " STATE: " + getStateAsString() + " " + "event queue size = " + (queue == null ? 0 : queue.size());
     }
 
     public AbstractContext getContext() {
@@ -260,9 +304,11 @@ public class ActivityRecord implements Serializable, ByteBuffers {
         if (queue != null) {
             queue.pushByteBuffers(list);
         }
-        
-        Activity activity = activityWrapper.getActivity();
-        
+
+        if (activity == null) {
+            retrieveActivity();
+        }
+
         if (activity != null && activity instanceof ByteBuffers) {
             ((ByteBuffers) activity).pushByteBuffers(list);
         }
@@ -273,12 +319,128 @@ public class ActivityRecord implements Serializable, ByteBuffers {
         if (queue != null) {
             queue.popByteBuffers(list);
         }
-        
-        Activity activity = activityWrapper.getActivity();
-        
+
+        if (activity == null) {
+            retrieveActivity();
+        }
+
         if (activity != null && activity instanceof ByteBuffers) {
             ((ByteBuffers) activity).popByteBuffers(list);
         }
+    }
+
+    private boolean persistActivity() {
+
+        if (!activity.mayBeStolen()) {
+            // some thread may access this instance
+            // so it should not be flushed to disk
+            return false;
+        }
+
+        File file = new File(tempDir + File.separator + identifier.toString());
+
+        try {
+            ObjectOutputStream oos = new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(file)));
+            file.deleteOnExit();
+            oos.writeObject(activity);
+
+            if (activity != null && activity instanceof ByteBuffers) {
+                ArrayList<ByteBuffer> list = new ArrayList<ByteBuffer>();
+                ((ByteBuffers) activity).pushByteBuffers(list);
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Writing " + list.size() + " bytebuffers");
+                }
+
+                oos.writeInt(list.size());
+                for (ByteBuffer b : list) {
+                    b.position(0);
+                    b.limit(b.capacity());
+                    oos.writeInt(b.capacity());
+                }
+
+                for (ByteBuffer b : list) {
+                    oos.write(b.array());
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Wrote bytebuffer of size " + b.capacity());
+                    }
+                }
+            }
+
+            oos.close();
+            activity = null;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return false;
+        }
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Activity " + identifier + " persisted to disk " + file.getAbsolutePath());
+        }
+
+        return true;
+    }
+
+    public boolean retrieveActivity() {
+
+        File file = new File(tempDir + File.separator + identifier.toString());
+
+        try {
+            ObjectInputStream ois = new ObjectInputStream(new BufferedInputStream(new FileInputStream(file)));
+            activity = (Activity) ois.readObject();
+
+            if (activity != null && activity instanceof ByteBuffers) {
+                int nByteBuffers = ois.readInt();
+                ArrayList<ByteBuffer> list = new ArrayList<ByteBuffer>();
+
+                if (nByteBuffers > 0) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Reading " + nByteBuffers + " bytebuffers");
+                    }
+
+                    for (int i = 0; i < nByteBuffers; i++) {
+                        int capacity = ois.readInt();
+                        ByteBuffer b = ByteBufferCache.getByteBuffer(capacity, false);
+                        list.add(b);
+                    }
+
+                    for (ByteBuffer b : list) {
+                        b.position(0);
+                        b.limit(b.capacity());
+                        byte[] buffer = new byte[b.capacity()];
+                        ois.read(buffer, 0, b.capacity());
+                        b.put(buffer, 0, b.capacity());
+                    }
+                }
+
+                ((ByteBuffers) activity).popByteBuffers(list);
+            }
+
+            ois.close();
+            file.delete();
+        } catch (IOException | ClassNotFoundException e) {
+            e.printStackTrace();
+            return false;
+        }
+
+        if (logger.isDebugEnabled()) {
+            logger.debug("Activity " + identifier + " retrieved from disk");
+        }
+
+        return true;
+    }
+
+    private void writeObject(ObjectOutputStream oos) throws IOException {
+        if (activity == null) {
+            retrieveActivity();
+        }
+
+        oos.defaultWriteObject();
+    }
+
+    @Override
+    protected void finalize() throws Throwable {
+        File file = new File(System.getProperty("java.io.tmpdir") + "/" + identifier.toString());
+        file.delete();
     }
 
     //    public Activity getActivity() {

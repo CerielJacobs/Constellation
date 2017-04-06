@@ -48,14 +48,14 @@ public class SimpleQueue implements Queue {
 		
 		size++;
 		
-		double freeRatio = (double) Runtime.getRuntime().freeMemory() / Runtime.getRuntime().totalMemory();
-		if (freeRatio < FREE_MEMORY_RATIO_THRESHOLD) {
-			a.persistActivity();
-			
-			if (logger.isDebugEnabled()) {
-				logger.debug("Activity " + a.identifier() + " persisted to disk");
-			}
-		}
+//		double freeRatio = (double) Runtime.getRuntime().freeMemory() / Runtime.getRuntime().totalMemory();
+//		if (freeRatio < FREE_MEMORY_RATIO_THRESHOLD) {
+//			a.persistActivity();
+//			
+//			if (logger.isDebugEnabled()) {
+//				logger.debug("Activity " + a.identifier() + " persisted to disk");
+//			}
+//		}
 	}
 
 	@Override

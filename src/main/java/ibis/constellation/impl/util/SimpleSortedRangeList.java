@@ -15,7 +15,7 @@ public class SimpleSortedRangeList implements SortedRangeList {
 
         private final long start;
         private final long end;
-        
+
         private final ActivityRecord data;
 
         Node(ActivityRecord data, long start, long end) {
@@ -162,7 +162,6 @@ public class SimpleSortedRangeList implements SortedRangeList {
         return current.data;
     }
 
-    
     public String getName() {
         return name;
     }

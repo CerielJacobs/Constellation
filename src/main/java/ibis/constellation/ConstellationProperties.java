@@ -200,6 +200,16 @@ public class ConstellationProperties extends Properties {
     public final int QUEUED_JOB_LIMIT;
 
     /**
+     * As new activities are spawned, memory usage may grow. In order to avoid OutOfMemoryExceptions, activities may be persisted
+     * to disk. The "memory.threshold" property defines the value of the <free memory> / <total memory> ratio below which a newly
+     * submitted activity will be persisted to disk. The default value is "0.2".
+     */
+    public static final String S_MEMORY_THRESHOLD = S_PREFIX + "memory.threshold";
+
+    /** Value of the "memory.threshold" property. */
+    public final double MEMORY_THRESHOLD;
+
+    /**
      * Creates a <code>ConstellationProperties</code> object using the specified properties.
      *
      * @param p
@@ -226,6 +236,7 @@ public class ConstellationProperties extends Properties {
         STEALSTRATEGY = getProperty(S_STEALSTRATEGY, "pool");
         REMOTESTEAL_TIMEOUT = getIntProperty(S_REMOTESTEAL_TIMEOUT, 5000);
         QUEUED_JOB_LIMIT = getIntProperty(S_QUEUED_JOB_LIMIT, 100);
+        MEMORY_THRESHOLD = getDoubleProperty(S_MEMORY_THRESHOLD, 0.2);
         if (logger.isInfoEnabled()) {
             logger.info("MASTER = " + MASTER);
             logger.info("CLOSED = " + CLOSED);
@@ -333,6 +344,31 @@ public class ConstellationProperties extends Properties {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
             throw new NumberFormatException("Integer expected for property " + key + ", not \"" + value + "\"");
+        }
+    }
+
+    /**
+     * Returns the double value of property.
+     *
+     * @return the double value of property
+     * @param key
+     *            property name
+     * @param defaultValue
+     *            default value if the property is undefined
+     * @throws NumberFormatException
+     *             if the property defined and not a double
+     */
+    private double getDoubleProperty(String key, double defaultValue) {
+        String value = getProperty(key);
+
+        if (value == null) {
+            return defaultValue;
+        }
+
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            throw new NumberFormatException("Double expected for property " + key + ", not \"" + value + "\"");
         }
     }
 

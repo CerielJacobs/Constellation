@@ -30,6 +30,8 @@ public class ExecutorWrapper implements Constellation {
 
     private final int QUEUED_JOB_LIMIT;
 
+    private final double MEMORY_THRESHOLD;
+
     private final SingleThreadedConstellation parent;
 
     private final ConstellationIdentifierImpl identifier;
@@ -82,6 +84,8 @@ public class ExecutorWrapper implements Constellation {
         this.remoteStealStrategy = config.getRemoteStealStrategy();
 
         QUEUED_JOB_LIMIT = p.QUEUED_JOB_LIMIT;
+
+        MEMORY_THRESHOLD = p.MEMORY_THRESHOLD;
 
         PROFILE = p.PROFILE;
         PROFILE_COMM = p.PROFILE_COMMUNICATION;
@@ -176,7 +180,7 @@ public class ExecutorWrapper implements Constellation {
         ActivityIdentifierImpl id = createActivityID(activity.expectsEvents());
         activity.setIdentifier(id);
 
-        ActivityRecord ar = new ActivityRecord(activity, id);
+        ActivityRecord ar = new ActivityRecord(activity, id, MEMORY_THRESHOLD);
 
         boolean match = ContextMatch.match(myContext, activity.getContext());
 
