@@ -24,6 +24,7 @@ public class FibonacciTest {
 
         Constellation c = ConstellationFactory.createConstellation(p, e, executors);
         c.activate();
+        
 
         if (c.isMaster()) {
 
@@ -40,7 +41,7 @@ public class FibonacciTest {
 
             long end = System.currentTimeMillis();
 
-            System.out.println("FIB: Fib(" + input + ") on " + executors + " threads = " + result + " (" + (end - start) + ")");
+            System.out.println("FIB: Fib(" + input + ") on " + executors + " threads = " + result + " (" + (end - start) + "ms)");
         } else {
             System.out.println("Starting as slave!");
             c.done();

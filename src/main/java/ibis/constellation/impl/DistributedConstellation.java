@@ -23,6 +23,8 @@ import ibis.constellation.StealPool;
 import ibis.constellation.impl.pool.Pool;
 import ibis.constellation.impl.pool.PoolCreationFailedException;
 import ibis.constellation.impl.util.Profiling;
+import ibis.constellation.impl.termination.InvalidTerminationActionException;
+import ibis.constellation.impl.termination.Terminator;
 
 /**
  * A <code>DistributedConstellation</code> sits between the communication pool and the underlying sub-constellation, which is a
@@ -31,7 +33,7 @@ import ibis.constellation.impl.util.Profiling;
  * Its main tasks are to pass messages from the sub-constellation to the communication pool, and vice versa, and to serve as a
  * facade implementing the {@link Constellation} interface for the application.
  */
-public class DistributedConstellation {
+public class DistributedConstellation implements Terminator<MultiThreadedConstellation> {
 
     private static final Logger logger = LoggerFactory.getLogger(DistributedConstellation.class);
 
@@ -40,6 +42,7 @@ public class DistributedConstellation {
      * {@link #STEAL_NONE}.
      */
     private final int stealStrategy;
+    
 
     /** Steal from pool steal strategy. */
     private static final int STEAL_POOL = 1;
@@ -831,6 +834,36 @@ public class DistributedConstellation {
 
     public Profiling getProfiling() {
         return profiling;
+    }
+    
+    
+    
+    
+    /** TERMINATION STUFF BELOW */
+    
+    /** Once the sub-constellation announces we are passive */
+    /** Once we pass down a activity we become active */
+    private boolean passive;
+    
+    private void initTerminationDetection() {
+        passive = true;
+    }
+    
+
+    
+    @Override
+    public void informTerminated(MultiThreadedConstellation t) {
+        if(passive)
+            throw new InvalidTerminationActionException("Informed of termination but already passive");
+        else passive = true;
+        
+    }
+
+    @Override
+    public void announceTermination() {
+        
+        // start termination detection among the Distributes instances
+        
     }
 
 }

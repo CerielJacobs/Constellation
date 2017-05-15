@@ -123,7 +123,7 @@ public class Fibonacci extends Activity {
 
             long end = System.currentTimeMillis();
 
-            System.out.println("FIB: Fib(" + input + ") = " + result + " (" + (end - start) + ")");
+            System.out.println("FIB: Fib(" + input + ") = " + result + " (" + (end - start) + "ms)");
         } else {
             System.out.println("Starting as slave!");
             c.done();

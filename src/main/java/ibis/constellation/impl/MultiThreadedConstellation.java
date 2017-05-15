@@ -21,7 +21,10 @@ import ibis.constellation.OrContext;
 import ibis.constellation.StealPool;
 import ibis.constellation.impl.util.Profiling;
 
-public class MultiThreadedConstellation {
+import ibis.constellation.impl.termination.Terminateable;
+import ibis.constellation.impl.termination.Terminator;
+
+public class MultiThreadedConstellation implements Terminateable, Terminator<SingleThreadedConstellation> {
 
     private static final Logger logger = LoggerFactory.getLogger(MultiThreadedConstellation.class);
 
@@ -561,6 +564,49 @@ public class MultiThreadedConstellation {
 
     public Constellation getConstellation() {
         return facade;
-
     }
+
+
+    
+    
+    
+    /** ΤΕΡΜΙΝΑΤΙΟΝ STUFF BELOW */
+    
+    /**
+     * Keeps track of how many are active below
+     * Increment by 1 everytime we pass work down
+     * Decrement by 1 everytime we get informed of termination from below
+     */
+    private int activeCount;
+    
+    @Override
+    public void performTermination() {
+        // bla bla
+        
+        this.announceTermination();
+        
+    }
+
+    @Override
+    public synchronized void informTerminated(SingleThreadedConstellation t) {
+        
+        assert (activeCount > 0);
+        
+        activeCount --;
+        
+        if(activeCount == 0 /* && other termination conditions */) 
+            this.performTermination();
+        
+    }
+
+    @Override
+    public void announceTermination() {
+        
+        // bla bla 
+        
+        parent.informTerminated(this);
+        
+    }
+    
+    
 }

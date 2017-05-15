@@ -1,6 +1,7 @@
 package ibis.constellation.impl;
 
 import java.io.BufferedOutputStream;
+
 import java.io.FileOutputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
@@ -28,8 +29,10 @@ import ibis.constellation.impl.util.CircularBuffer;
 import ibis.constellation.impl.util.Profiling;
 import ibis.constellation.impl.util.SimpleWorkQueue;
 import ibis.constellation.impl.util.WorkQueue;
+import ibis.constellation.impl.termination.Terminateable;
 
-public class SingleThreadedConstellation extends Thread {
+
+public class SingleThreadedConstellation extends Thread implements Terminateable {
 
     private static final Logger logger = LoggerFactory.getLogger(SingleThreadedConstellation.class);
 
@@ -1029,6 +1032,19 @@ public class SingleThreadedConstellation extends Thread {
 
     public Profiling getProfiling() {
         return profiling;
+    }
+    
+    
+    
+    
+    
+    /** TERMINATION STUFF */
+    @Override
+    public void performTermination() {
+        //bla bla
+        parent.informTerminated(this);
+        // TODO Auto-generated method stub
+        
     }
 
 }
