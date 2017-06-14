@@ -1,5 +1,6 @@
 package ibis.constellation.impl;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Random;
 
@@ -55,6 +56,13 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
     private final String PROFILE_OUTPUT;
 
     private final boolean PROFILE;
+    
+    
+    
+    int activeCount; 
+    private HashMap<ConstellationIdentifierImpl, Boolean> activatedWorkers;
+    
+    
 
     private class Facade implements Constellation {
 
@@ -177,6 +185,8 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
             parent.belongsTo(belongsTo);
             parent.stealsFrom(stealsFrom);
         }
+        
+        this.terminationInit();
 
     }
 
@@ -195,9 +205,23 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
             SingleThreadedConstellation e = workers[index];
 
             if (ContextMatch.match(e.getContext(), activity.getContext())) {
+                
+                // We pass down an Activity
+
+                
+                System.out.println(this.identifier + " (performSubmit()) Passing Activity Down to " + e.identifier() + " -ContextMatch");
+                
+                
+                /** We pass something down so we expect termination announcement from that Worker */
+                if( this.activatedWorkers.put(e.identifier(), true) == false ) { //This worker was empty before
+                    System.out.println("Activating new Worker");
+                    this.activeCount++;
+                }
+                
                 return e.performSubmit(activity);
             }
         }
+        
         if (logger.isInfoEnabled()) {
             logger.info("No local executor for this activity (no identifier yet)");
         }
@@ -213,12 +237,31 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
             SingleThreadedConstellation e = workers[index];
 
             if (e.belongsTo().isWorld()) {
+                
+                System.out.println(this.identifier + " (performSubmit()) Passing Activity Down to " + e.identifier() + " -World");
+                
+                /** We pass something down so we expect termination announcement from that Worker */
+                if( this.activatedWorkers.put(e.identifier(), true) == false ) { //This worker was empty before
+                    System.out.println("Activating new Worker");
+                    this.activeCount++;
+                }
+                
                 return e.performSubmit(activity);
             }
         }
 
+        // 
         int i = next++;
         next = next % workerCount;
+        
+        System.out.println(this.identifier + " (performSubmit()) Passing Activity Down to " + workers[i].identifier() + " -Random");
+        
+        /** We pass something down so we expect termination announcement from that Worker */
+        if( this.activatedWorkers.put(workers[i].identifier(), true) == false ) { //This worker was empty before
+            this.activeCount++;
+        }
+        
+        
         return workers[i].performSubmit(activity);
 
     }
@@ -454,6 +497,9 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
         }
 
         final int rnd = selectRandomWorker();
+        
+        // Did the parent receive the StealReply correctly ?
+        //boolean somethingWentWrong = false;
 
         // First attempt to satisfy the request without bothering anyone
         for (int i = 0; i < workerCount; i++) {
@@ -468,6 +514,7 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
                 if (logger.isDebugEnabled()) {
                     logger.debug("Found steal target: " + tmp.identifier() + ", pool = " + p);
                 }
+                
                 ActivityRecord[] result = tmp.attemptSteal(sr.context, sr.remoteStrategy, sr.pool, sr.source, sr.size, false);
 
                 if (result != null) {
@@ -476,6 +523,7 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
                     }
                     // We've managed to find some work!
                     if (!parent.handleStealReply(new StealReply(identifier, sr.source, sr.pool, sr.context, result))) {
+                        
                         tmp.reclaim(result);
                     }
 
@@ -504,7 +552,8 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
         // No steal request was posted either. Apparently, we are not able to
         // fulfill this request in the first place! Let's send an empty
         // reply....
-        parent.handleStealReply(new StealReply(identifier, sr.source, sr.pool, sr.context, (ActivityRecord) null));
+        parent.handleStealReply(StealReply.EMPTY(identifier, sr));
+        //parent.handleStealReply(new StealReply(identifier, sr.source, sr.pool, sr.context, (ActivityRecord) null));
     }
 
     public void deliverStealReply(StealReply sr) {
@@ -577,7 +626,18 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
      * Increment by 1 everytime we pass work down
      * Decrement by 1 everytime we get informed of termination from below
      */
-    private int activeCount;
+    
+    void terminationInit() {
+        this.activeCount = this.workerCount;
+        this.activatedWorkers = new HashMap<>();
+        
+        for(int i = 0; i < this.workers.length; i++) {
+            this.activatedWorkers.put(workers[i].identifier(), false);
+        }
+        
+        System.out.println(this.identifier + " Term. INIT. activeCount: " + this.activeCount);
+    }
+
     
     @Override
     public void performTermination() {
@@ -589,10 +649,14 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
 
     @Override
     public synchronized void informTerminated(SingleThreadedConstellation t) {
-        
+        System.out.println(this.identifier() + " got " + t.identifier() + " terminated");
         assert (activeCount > 0);
         
         activeCount --;
+        
+        this.activatedWorkers.put(t.identifier(), false);
+        
+        boolean allDone = !this.activatedWorkers.values().contains(true);
         
         if(activeCount == 0 /* && other termination conditions */) 
             this.performTermination();

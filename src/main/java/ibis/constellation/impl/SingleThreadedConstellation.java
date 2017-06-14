@@ -30,9 +30,10 @@ import ibis.constellation.impl.util.Profiling;
 import ibis.constellation.impl.util.SimpleWorkQueue;
 import ibis.constellation.impl.util.WorkQueue;
 import ibis.constellation.impl.termination.Terminateable;
+import ibis.constellation.impl.termination.Terminator;
 
 
-public class SingleThreadedConstellation extends Thread implements Terminateable {
+public class SingleThreadedConstellation extends Thread implements Terminateable, Terminator<ExecutorWrapper> {
 
     private static final Logger logger = LoggerFactory.getLogger(SingleThreadedConstellation.class);
 
@@ -473,25 +474,34 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         }
         return false;
     }
-
+    
+    
     private synchronized boolean pushWorkToExecutor(StealStrategy s) {
-
+        
         if (pushRelocatedToExecutor()) {
+            System.out.println(this.identifier() + " Push Relocated" );
             return true;
         }
 
         // Else: try to push one restricted activity to our executor
         if (pushWorkFromQueue(restricted, s)) {
+            System.out.println(this.identifier() + " Push Restricted" );
             return true;
         }
 
         // Else: try to push one stolen activity to our executor
         if (pushWorkFromQueue(stolen, s)) {
+            System.out.println(this.identifier() + " Push Stolen" );
             return true;
         }
 
         // Else: try to push one fresh activity to our executor
-        return pushWorkFromQueue(fresh, s);
+        if (pushWorkFromQueue(fresh, s)) {
+            System.out.println(this.identifier() + " Push Fresh" );
+            return true;
+        }
+        
+        return false;
     }
 
     public void deliverStealReply(StealReply sr) {
@@ -889,8 +899,19 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         if (haveRequests) {
             processEvents();
         }
-
-        if (wrapper.process() || pushWorkToExecutor(wrapper.getLocalStealStrategy())) {
+        
+        boolean wrapperProcess = wrapper.process(); //try execute an activity
+        boolean pushWorkToExecutor = false;
+        
+        if(!wrapperProcess) {
+            pushWorkToExecutor = pushWorkToExecutor(wrapper.getLocalStealStrategy()); //try push something down
+        }
+        
+        if(pushWorkToExecutor) { //We push something down. We have to wait for termination from below!
+            this.waitBelow = true;
+        }
+        
+        if (wrapperProcess || pushWorkToExecutor) {
             // Either we processed an activity, or we pushed one to the wrapper.
             return false;
         }
@@ -924,7 +945,7 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
             }
             ActivityRecord[] result = parent.handleStealRequest(this, stealSize);
 
-            if (result != null) {
+            if (result != null) { //parent returned something
                 boolean more = false;
                 for (ActivityRecord element : result) {
                     if (element != null) {
@@ -949,8 +970,9 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
     public void run() {
 
         long start = System.currentTimeMillis();
-
+        
         wrapper.runExecutor();
+        
 
         if (PRINT_STATISTICS) {
             printStatistics(System.currentTimeMillis() - start);
@@ -1039,12 +1061,33 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
     
     
     /** TERMINATION STUFF */
+    
+    private boolean waitBelow;
+    
     @Override
     public void performTermination() {
         //bla bla
-        parent.informTerminated(this);
-        // TODO Auto-generated method stub
         
+        // TODO Auto-generated method stub
+        waitBelow = false;
+        announceTermination();
+    }
+
+    @Override
+    public void announceTermination() {
+        // TODO Auto-generated method stub
+        System.out.println(this.identifier() + " announcing termination to parent " + parent.identifier());
+        parent.informTerminated(this);
+        
+    }
+
+    @Override
+    public void informTerminated(ExecutorWrapper t) {
+        if(t != this.wrapper) {
+            System.out.println("Invalid Wrapper for this SingleThreadedConstellation instance");
+        }else {
+            performTermination();
+        }
     }
 
 }

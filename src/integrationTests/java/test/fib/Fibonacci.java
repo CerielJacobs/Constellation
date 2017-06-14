@@ -110,7 +110,7 @@ public class Fibonacci extends Activity {
 
         if (c.isMaster()) {
 
-            System.out.println("Starting as master!");
+            System.out.println(c.identifier() + " Starting as master!");
 
             SingleEventCollector a = new SingleEventCollector(new Context("fib"));
 

@@ -15,6 +15,11 @@ public class StealReply extends Message implements ByteBuffers {
     private final StealPool pool;
     private final AbstractContext context;
     private final ActivityRecord[] work;
+    
+    
+    public static final StealReply EMPTY(final ConstellationIdentifierImpl source, final StealRequest sr) {
+        return new StealReply(source, sr.source, sr.pool, sr.context, (ActivityRecord) null);
+    }
 
     public StealReply(final ConstellationIdentifierImpl source, final ConstellationIdentifierImpl target, final StealPool pool,
             final AbstractContext context, final ActivityRecord work) {

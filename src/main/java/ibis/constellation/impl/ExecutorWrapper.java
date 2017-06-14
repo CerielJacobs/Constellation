@@ -17,11 +17,12 @@ import ibis.constellation.Event;
 import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
+import ibis.constellation.impl.termination.Terminateable;
 import ibis.constellation.impl.util.CircularBuffer;
 import ibis.constellation.impl.util.SimpleWorkQueue;
 import ibis.constellation.impl.util.WorkQueue;
 
-public class ExecutorWrapper implements Constellation {
+public class ExecutorWrapper implements Constellation, Terminateable {
 
     private static final Logger logger = LoggerFactory.getLogger(ExecutorWrapper.class);
 
@@ -89,7 +90,9 @@ public class ExecutorWrapper implements Constellation {
         if (logger.isInfoEnabled()) {
             logger.info("Executor set job limit to " + QUEUED_JOB_LIMIT);
         }
-
+        
+        
+        /** These are different than the SingleThreadedConstellation WorkQueues !? Ask Ceriel */
         restricted = new SimpleWorkQueue("ExecutorWrapper(" + identifier + ")-restricted");
         fresh = new SimpleWorkQueue("ExecutorWrapper(" + identifier + ")-fresh");
 
@@ -115,6 +118,7 @@ public class ExecutorWrapper implements Constellation {
 
     @Override
     public void done() {
+        System.out.println(this.identifier + " Somebody called done()");
         if (lookup.size() > 0) {
             logger.warn("Quiting Constellation with " + lookup.size() + " activities in queue");
         }
@@ -153,7 +157,8 @@ public class ExecutorWrapper implements Constellation {
         if (size > 0) {
             return fresh.steal(myContext, localStealStrategy);
         }
-
+        
+        
         return null;
     }
 
@@ -161,9 +166,12 @@ public class ExecutorWrapper implements Constellation {
         // add an activity that only I am allowed to run, either because
         // it is relocated, or because we have just obtained it and we don't
         // want anyone else to steal it from us.
-
         lookup.put(a.identifier(), a);
         relocated.insertLast(a);
+        
+        //At this point we have at least 1 activity so we have to announce termination again
+        //Hopefully the layers above expect it too!
+        this.hasItemsInSomeQueue = true;
     }
 
     private synchronized ActivityIdentifierImpl createActivityID(boolean events) {
@@ -293,7 +301,7 @@ public class ExecutorWrapper implements Constellation {
 
     protected ActivityRecord[] steal(AbstractContext context, StealStrategy s, boolean allowRestricted, int count,
             ConstellationIdentifier source) {
-
+        System.out.println("Steal Called!");
         steals++;
 
         ActivityRecord[] result = new ActivityRecord[count];
@@ -355,6 +363,15 @@ public class ExecutorWrapper implements Constellation {
 
     }
 
+    
+    /**
+     * Dequeue an activity an run it.
+     * Only activities this executor can run are processed.
+     * When {@code false} is returned, it is possible that
+     * activities of different context are still in queue
+     * 
+     * @return Whether there are still activities this Executor can execute
+     */
     public boolean process() {
 
         ActivityRecord tmp = dequeue();
@@ -371,7 +388,10 @@ public class ExecutorWrapper implements Constellation {
             process(tmp);
             return true;
         }
-
+        
+        //No more activities this executor can execute
+        //this.performTermination();
+        
         return false;
     }
 
@@ -465,6 +485,8 @@ public class ExecutorWrapper implements Constellation {
         }
 
         logger.info("Executor done!");
+        
+        //Check if queues empty here?
     }
 
     @Override
@@ -538,6 +560,23 @@ public class ExecutorWrapper implements Constellation {
      */
     public StealPool belongsTo() {
         return myPool;
+    }
+    
+    
+    
+    /** TERMINATION STUFF */
+    
+    private boolean isExecuting, hasItemsInSomeQueue;
+
+    @Override
+    public void performTermination() {
+        int r = this.restricted.size();
+        int f = this.fresh.size();
+        
+        System.out.println("QUEUES AFTER WRAPPER DONE\nRestricted: " + r + " Fresh: " + f );
+        
+        parent.informTerminated(this);
+        
     }
 
 }
