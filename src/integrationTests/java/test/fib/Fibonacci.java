@@ -28,7 +28,7 @@ public class Fibonacci extends Activity {
         this.top = top;
 
         if (top) {
-            System.out.println("fib " + input + " created.");
+            //System.out.println("fib " + input + " created.");
         }
     }
 
@@ -40,7 +40,7 @@ public class Fibonacci extends Activity {
     public int initialize(Constellation c) {
 
         if (top) {
-            System.out.println("fib " + input + " running.");
+            //System.out.println("fib " + input + " running.");
         }
 
         if (input == 0 || input == 1) {
@@ -62,7 +62,7 @@ public class Fibonacci extends Activity {
     public int process(Constellation c, Event e) {
 
         if (top) {
-            System.out.println("fib " + input + " got event.");
+            //System.out.println("fib " + input + " got event.");
         }
 
         output += (Integer) e.getData();
@@ -110,7 +110,7 @@ public class Fibonacci extends Activity {
 
         if (c.isMaster()) {
 
-            System.out.println(c.identifier() + " Starting as master!");
+            //System.out.println(c.identifier() + " Starting as master!");
 
             SingleEventCollector a = new SingleEventCollector(new Context("fib"));
 
@@ -119,14 +119,14 @@ public class Fibonacci extends Activity {
 
             int result = (Integer) a.waitForEvent().getData();
 
-            c.done();
+            //c.done();
 
             long end = System.currentTimeMillis();
 
             System.out.println("FIB: Fib(" + input + ") = " + result + " (" + (end - start) + "ms)");
         } else {
             System.out.println("Starting as slave!");
-            c.done();
+            //c.done();
         }
     }
 

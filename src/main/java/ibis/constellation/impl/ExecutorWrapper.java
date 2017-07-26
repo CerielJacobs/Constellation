@@ -1,6 +1,7 @@
 package ibis.constellation.impl;
 
 import java.util.HashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +18,7 @@ import ibis.constellation.Event;
 import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.StealPool;
 import ibis.constellation.StealStrategy;
-import ibis.constellation.impl.termination.Terminateable;
+import ibis.constellation.impl.termination.*;
 import ibis.constellation.impl.util.CircularBuffer;
 import ibis.constellation.impl.util.SimpleWorkQueue;
 import ibis.constellation.impl.util.WorkQueue;
@@ -92,7 +93,7 @@ public class ExecutorWrapper implements Constellation, Terminateable {
         }
         
         
-        /** These are different than the SingleThreadedConstellation WorkQueues !? Ask Ceriel */
+        /** Q: Are these are different than the SingleThreadedConstellation WorkQueues? */
         restricted = new SimpleWorkQueue("ExecutorWrapper(" + identifier + ")-restricted");
         fresh = new SimpleWorkQueue("ExecutorWrapper(" + identifier + ")-fresh");
 
@@ -100,20 +101,43 @@ public class ExecutorWrapper implements Constellation, Terminateable {
         initializeTimer = parent.getTimer("java", parent.identifier().toString(), "initialize");
         cleanupTimer = parent.getTimer("java", parent.identifier().toString(), "cleanup");
         processTimer = parent.getTimer("java", parent.identifier().toString(), "process");
+        
+        this.terminationDetectionInitialize();
 
     }
-
-    private void cancel(ActivityIdentifier activityIdentifier) {
-
+    
+    /**
+     * Remove a runnable Activity
+     * 
+     * @param activityIdentifier
+     * @return 
+     *      {@code true}  - An Activity is removed from the queue <br/>
+     *      {@code false} - Nothing is removed
+     */
+    private boolean cancel(ActivityIdentifier activityIdentifier) {
+        
+        /** Q: Is it possible that lookup.remove() returns non-null
+         *     but ar.needsToRun() == false? */
         ActivityRecord ar = lookup.remove(activityIdentifier);
 
         if (ar == null) {
-            return;
+            return false;
         }
 
         if (ar.needsToRun()) {
-            runnable.remove(ar);
+            
+            if (runnable.remove(ar)) {
+                
+                /** TD: we remove one from runnable */
+                decActivities(1);
+                
+                return true;
+            }
+                
+            
         }
+        
+        return false;
     }
 
     @Override
@@ -124,7 +148,17 @@ public class ExecutorWrapper implements Constellation, Terminateable {
         }
         parent.performDone();
     }
-
+    
+    /** 
+     * Attempt to dequeue an activity
+     * 
+     * TD:  When this method returns non-null we have removed something
+     *      However, we cannot check for termination here because it is
+     *      only within from process() and that may dequeue an activity
+     *      and run it! Thus we check for termination in process()
+     * 
+     * @return A dequeued Activity on success or null
+     */
     private ActivityRecord dequeue() {
 
         // Try to dequeue an activity that we can run.
@@ -166,12 +200,13 @@ public class ExecutorWrapper implements Constellation, Terminateable {
         // add an activity that only I am allowed to run, either because
         // it is relocated, or because we have just obtained it and we don't
         // want anyone else to steal it from us.
+        System.out.println("    addPrivateActivity() " + identifier + " " + this.activitiesInQueue + 1);
+        
         lookup.put(a.identifier(), a);
         relocated.insertLast(a);
         
-        //At this point we have at least 1 activity so we have to announce termination again
-        //Hopefully the layers above expect it too!
-        this.hasItemsInSomeQueue = true;
+        /** TD: we added to the relocated */
+        incActivities(1);
     }
 
     private synchronized ActivityIdentifierImpl createActivityID(boolean events) {
@@ -196,7 +231,10 @@ public class ExecutorWrapper implements Constellation, Terminateable {
                 throw new NoSuitableExecutorException("Cannot execute on this constellation");
             }
             wrongContextSubmitted++;
+            
+            /** TD: The activity was not in some local queue so we don't decrease activitiesInQueue */
             parent.deliverWrongContext(ar);
+            
             return id;
         }
 
@@ -208,11 +246,16 @@ public class ExecutorWrapper implements Constellation, Terminateable {
             // interrupting me.
             // But we keep restricted jobs anyway, if we can execute them. We might be the only executor that can execute them,
             // and maybe we cannot steal ... --Ceriel
+            
+            /** TD: The activity was not in some local queue so we don't decrease activitiesInQueue */
             return parent.doSubmit(ar, activity.getContext(), id);
         }
 
         lookup.put(id, ar);
-
+        
+        /** TD: Here we enqueue something so our count is increased */
+        incActivities(1);
+        
         if (ar.isRestrictedToLocal()) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Submit job to restricted of " + identifier + ", length was " + restricted.size());
@@ -264,6 +307,8 @@ public class ExecutorWrapper implements Constellation, Terminateable {
             boolean change = ar.setRunnable();
 
             if (change) {
+                /** Q: Why do we insert here? This activity is not dequeued anywhere 
+                 *     Where does ar come from? Does this mean that queues may have duplicate activities? */
                 runnable.insertLast(ar);
             }
 
@@ -288,6 +333,7 @@ public class ExecutorWrapper implements Constellation, Terminateable {
             boolean change = ar.setRunnable();
 
             if (change) {
+                /** Q: Same as in send() above */
                 runnable.insertLast(ar);
             }
 
@@ -301,7 +347,7 @@ public class ExecutorWrapper implements Constellation, Terminateable {
 
     protected ActivityRecord[] steal(AbstractContext context, StealStrategy s, boolean allowRestricted, int count,
             ConstellationIdentifier source) {
-        System.out.println("Steal Called!");
+
         steals++;
 
         ActivityRecord[] result = new ActivityRecord[count];
@@ -335,12 +381,24 @@ public class ExecutorWrapper implements Constellation, Terminateable {
             }
             stolenJobs += r;
             stealSuccess++;
-            return result;
         }
-        return null;
+        
+        /** TD: r Activities have been removed from our queues (r could be zero) */    
+        decActivities(r);
+        
+        return r != 0? result : null;
     }
-
-    private void process(ActivityRecord tmp) {
+    
+    /**
+     * 
+     * @param tmp
+     * @return {@code true}  - the activity is done with and removed <br/>
+     *         {@code false} - the activity is inserted in the {@link #runnable} queue
+     * @postcondition
+     * The contract is that when {@code false} is returned {@code tmp} is put back in a queue
+     * and when {@code true} is returned {@code tmp} is not put back in the queue.
+     */
+    private boolean process(ActivityRecord tmp) {
         int evt = 0;
 
         TimerImpl timer = tmp.isFinishing() ? cleanupTimer : tmp.isRunnable() ? processTimer : initializeTimer;
@@ -356,11 +414,27 @@ public class ExecutorWrapper implements Constellation, Terminateable {
         }
 
         if (tmp.needsToRun()) {
-            runnable.insertFirst(tmp);
-        } else if (tmp.isDone()) {
-            cancel(tmp.identifier());
-        }
+            
 
+            runnable.insertFirst(tmp);
+            
+            /** TD: dequeue() could have removed from runnable but we handle that inside process()
+             *      Thus, we are safe to increment here */
+            
+            incActivities(1);
+            
+            return false;
+            
+        } else if (tmp.isDone()) {
+            
+            /** TD: If we remove something with cancel we handle it inside it */
+            if ( cancel(tmp.identifier()) ) {
+                /** Q: I think this should never happen? */
+            }
+        }
+        
+        return true;
+        
     }
 
     
@@ -370,9 +444,10 @@ public class ExecutorWrapper implements Constellation, Terminateable {
      * When {@code false} is returned, it is possible that
      * activities of different context are still in queue
      * 
-     * @return Whether there are still activities this Executor can execute
+     * @return {@code true} - We processed an activity
+     *         {@code false} - The queue was empty and we processed nothing
      */
-    public boolean process() {
+    public boolean process() throws TerminationDetectedException {
 
         ActivityRecord tmp = dequeue();
 
@@ -382,15 +457,39 @@ public class ExecutorWrapper implements Constellation, Terminateable {
         // match.
 
         if (tmp != null) {
+            
+            /** TD: we certainly dequeued something, however have to first execute the activity 
+             *      So lets decrement and check for termination after the process() returns */
+            
+            if(!terminationDetectionStarted) //this should never happen
+                System.out.println("PANIC");
             if (logger.isDebugEnabled()) {
                 logger.debug("Processing activity " + tmp.identifier());
             }
-            process(tmp);
+            if ( process(tmp) ) {
+                /* Check for termination after we have processed an activity 
+                 * 
+                 * We cannot check with attemptTermination() here because this
+                 * method is called by the parent SingleThreadedConstellation 
+                 * so if termination occurs here let it know by throwing an exception.
+                 * and let parent handle it.
+                 * */
+                
+                /** TD: This process() is called by the parent. devActivities with decrement by 1 and then
+                 *      check for termination. If terminated we call parent.informTerminated(this) which in
+                 *      turn and if has empty queues will in turn call parent.informTerminated(this) and if
+                 *      all other workers are passive local termination is announced. My point is, the following
+                 *      decActivities call could potentially make the MultiThreadedConstellation to announce. 
+                 *      Is this ok? Or maybe we can throw an exception instead here? 
+                 **/
+                decActivities(1);
+                
+            } else {
+                /* We do nothing because tmp is put back in queue */
+            }
+            
             return true;
         }
-        
-        //No more activities this executor can execute
-        //this.performTermination();
         
         return false;
     }
@@ -459,7 +558,6 @@ public class ExecutorWrapper implements Constellation, Terminateable {
     }
 
     public void runExecutor() {
-
         if (logger.isInfoEnabled()) {
             StringBuilder sb = new StringBuilder("\nStarting Executor: " + identifier() + "\n");
 
@@ -475,11 +573,14 @@ public class ExecutorWrapper implements Constellation, Terminateable {
         }
 
         boolean done = false;
-
+        
+        
         try {
             while (!done) {
                 done = processActivities();
             }
+        } catch (TerminationDetectedException e) {
+            System.out.println("Executor Termination");
         } catch (Throwable e) {
             logger.error("Executor terminated unexpectedly!", e);
         }
@@ -566,17 +667,76 @@ public class ExecutorWrapper implements Constellation, Terminateable {
     
     /** TERMINATION STUFF */
     
-    private boolean isExecuting, hasItemsInSomeQueue;
+    /** TD: keeps track of how many activities reside in some local queue */
+    private AtomicInteger activitiesInQueue;
+    
+    /** TD: When {@code true} there's either at least 1 activity 
+     *      in some queue or we are executing one (or both)
+     *      
+     *      When {@code false} all queues are empty and no 
+     *      activity currently executing */
+    private boolean terminationDetectionStarted;
+    
+    
+    
+    private void terminationDetectionInitialize() {
+        this.activitiesInQueue = new AtomicInteger(0);
+        this.terminationDetectionStarted = false;
+    }
+    
+    private void incActivities(int by) {
+        if (by != 0) {
+            this.activitiesInQueue.addAndGet(by);
+            
+            if (!this.terminationDetectionStarted)
+                terminationDetectionStarted = true;
+        }
+    }
+    
+    private void decActivities(int by) {
+        if (by != 0) {
+            this.activitiesInQueue.addAndGet(-by);
+            
+            if ( terminationCheck() ) {
+                performTermination();
+            }
+        }
+    }
+    
+    private boolean terminationCheck() {
+        return this.terminationDetectionStarted && this.activitiesInQueue.get() == 0;
+    }
 
     @Override
     public void performTermination() {
-        int r = this.restricted.size();
-        int f = this.fresh.size();
         
-        System.out.println("QUEUES AFTER WRAPPER DONE\nRestricted: " + r + " Fresh: " + f );
-        
+        System.out.println("    Executor " + this.identifier() + " has empty queues");
         parent.informTerminated(this);
         
     }
+    
+    
+    
+    /**
+     * This method is called every time we remove something from some queue
+     * It first decreases the activity count and then it checks if 0 and if
+     * so it lets the parent know
+     */
+//    private void attemptTermination(int removed) {
+//        if (removed > 0 && !this.terminationDetectionStarted) {
+//            System.out.println("PANIC: Activities removed but termination detection was not started " + identifier);
+//        }
+//        
+//        this.activitiesInQueue -= removed;
+//        
+//        if (this.activitiesInQueue < 0) {
+//            /* Sanity check. Should never happen */
+//            System.out.println("PANIC: Activity count less than 0. " + identifier);
+//            logger.error("EXECUTOR-TERM-DETECT-ERROR: activitiesInQueue less than 0," + identifier);
+//        }
+//        
+//        if(this.terminationDetectionStarted && activitiesInQueue == 0)
+//            performTermination();
+//    }
 
 }

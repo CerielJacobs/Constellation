@@ -9,7 +9,9 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,8 +32,8 @@ import ibis.constellation.impl.util.Profiling;
 import ibis.constellation.impl.util.SimpleWorkQueue;
 import ibis.constellation.impl.util.WorkQueue;
 import ibis.constellation.impl.termination.Terminateable;
+import ibis.constellation.impl.termination.TerminationDetectedException;
 import ibis.constellation.impl.termination.Terminator;
-
 
 public class SingleThreadedConstellation extends Thread implements Terminateable, Terminator<ExecutorWrapper> {
 
@@ -222,6 +224,8 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         myPool = wrapper.belongsTo();
         stealPool = wrapper.stealsFrom();
 
+
+
     }
 
     public void setRank(final int rank) {
@@ -268,10 +272,25 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
          * SingleThreadedConstellation, and the activity should be submitted to
          * its wrapper, because this executor may not be able to steal.
          */
+        
+        
+        /** TD: We are given something so start termination detection if not already started */
+        terminationDetectionInitiate("  Termination detection started by performSubmit() @ " + identifier);
+        
+        /** TD: We pass something down. We never had it in our queues so we don't decrease activitiesInQueue */
         return wrapper.submit(activity);
     }
 
-    public ActivityIdentifierImpl doSubmit(final ActivityRecord ar, final AbstractContext c, final ActivityIdentifierImpl id) {
+    /**
+     * TD: This is only called from below ?
+     * 
+     * @param ar
+     * @param c
+     * @param id
+     * @return
+     */
+    public ActivityIdentifierImpl doSubmit(final ActivityRecord ar, final AbstractContext c,
+            final ActivityIdentifierImpl id) {
 
         if (ContextMatch.match(c, wrapper.getContext())) {
 
@@ -289,10 +308,20 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
                     }
                     fresh.enqueue(ar);
                 }
+                
+                /** TD: This should probably do nothing because doSubmit() is only called from within the
+                 *      wrapper.submit() and this.performSubmit() is called before the wrapper.submit() */
+                terminationDetectionInitiate("  Termination detection started by doSubmit() @ " + identifier);
+                
+                /** TD: We added something to some queue */
+                this.incActivities(1);
             }
         } else {
+            /** TD: we also add something to some queue but it's handled by deliverWrongContext() itself */
             deliverWrongContext(ar);
         }
+        
+       
 
         return id;
     }
@@ -305,14 +334,22 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         logger.error("INTERNAL ERROR: Cancel not implemented!");
     }
 
+    /**
+     * Called by the parent to Activate me
+     * 
+     * @return
+     */
     public boolean performActivate() {
-
+        
         synchronized (this) {
             if (active) {
                 return false;
             }
 
             active = true;
+            
+            /** TD: Initialize termination detection */
+            terminationDetectionInitialize(null);
         }
 
         start();
@@ -339,29 +376,64 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
             }
         }
     }
-
+    
+    /**
+     * Copy the contents of {@code a} into a new array of length {@code count} <br/><br/>
+     * Used by attemptStea()
+     * 
+     * Q: I guess it's because attemptSteal() can return less than *size, so we 
+     *    trim the array for it's length to match the number of stolen activities?
+     * 
+     * @param a
+     * @param count
+     * @return
+     */
     private ActivityRecord[] trim(final ActivityRecord[] a, final int count) {
         if (a.length > count) {
             return Arrays.copyOf(a, count);
         }
         return a;
     }
-
+    
+    /**
+     * Called by the parent
+     * 
+     * @param context
+     * @param s
+     * @param pool
+     * @param source
+     * @param size
+     * @param local
+     * @return
+     */
     public ActivityRecord[] attemptSteal(final AbstractContext context, final StealStrategy s, final StealPool pool,
             final ConstellationIdentifierImpl source, final int size, final boolean local) {
 
         final ActivityRecord[] result = new ActivityRecord[size];
 
+        /** TD: we subtract leaving activities inside this attemptSteal() */
         final int count = attemptSteal(result, context, s, pool, source, size, local);
 
         if (count == 0) {
             return null;
         }
-
+        
         return trim(result, count);
     }
-
-    private int localSteal(final AbstractContext context, final StealStrategy s, final ActivityRecord[] result, final int o, final int size) {
+    
+    /**
+     * TD: Only called from within attemptSteal which handles updating activity count.
+     *     Thus, no need to take action here
+     *     
+     * @param context
+     * @param s
+     * @param result
+     * @param o
+     * @param size
+     * @return
+     */
+    private int localSteal(final AbstractContext context, final StealStrategy s, final ActivityRecord[] result,
+            final int o, final int size) {
         int offset = o;
         if (offset < size) {
             offset += restrictedWrongContext.steal(context, s, result, offset, size - offset);
@@ -377,9 +449,22 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
 
         return offset;
     }
-
-    public synchronized int attemptSteal(final ActivityRecord[] tmp, final AbstractContext context, final StealStrategy s, final StealPool pool,
-            final ConstellationIdentifierImpl src, final int size, final boolean local) {
+    
+    /**
+     * Our parent calls this to handle a steal request
+     * 
+     * @param tmp
+     * @param context
+     * @param s
+     * @param pool
+     * @param src
+     * @param size
+     * @param local
+     * @return
+     */
+    public synchronized int attemptSteal(final ActivityRecord[] tmp, final AbstractContext context,
+            final StealStrategy s, final StealPool pool, final ConstellationIdentifierImpl src, final int size,
+            final boolean local) {
 
         // attempted steal request from parent. Expects an immediate reply
         steals++;
@@ -418,22 +503,27 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         }
 
         if (logger.isDebugEnabled()) {
-            logger.debug("Stole " + offset + " jobs from " + identifier + ": " + fromWrong + " from wrongContext, " + fromFresh
-                    + " from fresh");
+            logger.debug("Stole " + offset + " jobs from " + identifier + ": " + fromWrong + " from wrongContext, "
+                    + fromFresh + " from fresh");
         }
 
         // Next, remove activities from lookup, and mark and register them as
         // relocated or stolen/exported
         registerLeavingActivities(tmp, offset, src, local);
-
+        
+        System.out.println("  attemptSteal() " + offset); 
+        
         stolenJobs += offset;
         stealSuccess++;
+        
+        /** TD: We removed *offset* activities from our queues */
+        this.decActivities(offset);
 
         return offset;
     }
 
-    private synchronized void registerLeavingActivities(final ActivityRecord[] ar, final int len, final ConstellationIdentifierImpl dest,
-            final boolean isLocal) {
+    private synchronized void registerLeavingActivities(final ActivityRecord[] ar, final int len,
+            final ConstellationIdentifierImpl dest, final boolean isLocal) {
 
         for (int i = 0; i < len; i++) {
             if (ar[i] != null) {
@@ -460,10 +550,17 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
 
     private synchronized boolean pushWorkFromQueue(final WorkQueue queue, final StealStrategy s) {
         if (queue.size() > 0) {
+            
             final ActivityRecord ar = queue.steal(wrapper.getContext(), s);
+            
             if (ar != null) {
                 lookup.remove(ar.identifier());
                 wrapper.addPrivateActivity(ar);
+                
+                /** TD: we remove something from the queue */
+                this.decActivities(1);
+                
+                /** TD: we may have to check for initiating termination (wait the wrapper) here */
                 return true;
             }
         }
@@ -476,10 +573,16 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
             if (logger.isDebugEnabled()) {
                 logger.debug("Found work on relocated list: " + relocated.size() + " jobs");
             }
+            
             while (relocated.size() > 0) {
                 final ActivityRecord ar = relocated.removeFirst();
                 lookup.remove(ar.identifier());
                 wrapper.addPrivateActivity(ar);
+                
+                /** TD: we remove something from the relocated queue */
+                this.decActivities(1);
+                
+                /** TD: we may have to check for initiating termination (wait the wrapper) here */
             }
 
             return true;
@@ -487,31 +590,38 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         return false;
     }
 
+    /**
+     * TD: The activities we remove are handled inside the 
+     *     pushRelocatedToExecutor() and pushWorkFromQueue() above
+     *     
+     * @param s
+     * @return
+     */
     private synchronized boolean pushWorkToExecutor(final StealStrategy s) {
-
+        
         if (pushRelocatedToExecutor()) {
-            System.out.println(this.identifier() + " Push Relocated" );
+            System.out.println(this.identifier() + " Push Relocated");
             return true;
         }
 
         // Else: try to push one restricted activity to our executor
         if (pushWorkFromQueue(restricted, s)) {
-            System.out.println(this.identifier() + " Push Restricted" );
+            System.out.println(this.identifier() + " Push Restricted");
             return true;
         }
 
         // Else: try to push one stolen activity to our executor
         if (pushWorkFromQueue(stolen, s)) {
-            System.out.println(this.identifier() + " Push Stolen" );
+            System.out.println(this.identifier() + " Push Stolen");
             return true;
         }
 
         // Else: try to push one fresh activity to our executor
         if (pushWorkFromQueue(fresh, s)) {
-            System.out.println(this.identifier() + " Push Fresh" );
+            System.out.println(this.identifier() + " Push Fresh");
             return true;
         }
-        
+
         return false;
     }
 
@@ -549,6 +659,10 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
                     } else {
                         stolen.enqueue(a);
                     }
+                    
+                    /** TD: we added something */
+                    this.incActivities(1);
+                    
                     signal();
                 }
             }
@@ -716,8 +830,8 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
                 // Failed to deliver event locally. Check if the activity is
                 // now in one of the local queues. If not, return to parent.
                 if (logger.isInfoEnabled()) {
-                    logger.info("Failed to deliver message from " + m.source + " / " + m.event.getSource() + " to " + m.target
-                            + " / " + m.event.getTarget() + " (resending)");
+                    logger.info("Failed to deliver message from " + m.source + " / " + m.event.getSource() + " to "
+                            + m.target + " / " + m.event.getTarget() + " (resending)");
                 }
 
                 handleEvent(m.event);
@@ -727,7 +841,8 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
     }
 
     /**
-     * Reclaim is used to re-insert activities into the queue whenever a steal reply failed to be sent.
+     * Reclaim is used to re-insert activities into the queue whenever a steal
+     * reply failed to be sent.
      *
      * @param a
      *            the ActivityRecords to reclaim
@@ -745,13 +860,24 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
                 final AbstractContext c = ar.getContext();
 
                 if (ar.isRelocated()) {
-                    // We should unset the relocation flag if an activity is returned.
+                    // We should unset the relocation flag if an activity is
+                    // returned.
                     ar.setRelocated(false);
-                    relocated.remove(ar);
+                    
+                    /** Q: should this be the relocatedActivities hashmap instead? 
+                     *     because in the else case below we remove from exportedActivities,
+                     *     and we also add back to some queue in the if below */
+                    relocated.remove(ar); 
+                    
+                    /** TD: we remove from relocated */
+                    this.decActivities(1);
+                    
                 } else if (ar.isStolen()) {
-                    // We should unset the stolen flag if an activity is returned.
+                    // We should unset the stolen flag if an activity is
+                    // returned.
                     ar.setStolen(false);
                     exportedActivities.remove(ar.identifier());
+                    
                 }
 
                 if (ContextMatch.match(c, wrapper.getContext())) {
@@ -766,8 +892,12 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
                         } else {
                             fresh.enqueue(ar);
                         }
+                        
+                        /** TD: we insert something to some queue */
+                        this.incActivities(1);
                     }
                 } else {
+                    /** TD: we also add something to some queue but it's handled by deliverWrongContext() itself */
                     deliverWrongContext(ar);
                 }
             }
@@ -775,7 +905,7 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
     }
 
     private void processStealRequests() {
-
+        
         final Collection<StealRequest> requests = processing.stealRequests.values();
 
         for (final StealRequest s : requests) {
@@ -784,12 +914,16 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
 
             synchronized (this) {
 
-                // We grab the lock here to prevent other threads (from above) from doing a lookup in the
-                // relocated/exported tables while we are removing activities from the executor's queue.
+                // We grab the lock here to prevent other threads (from above)
+                // from doing a lookup in the
+                // relocated/exported tables while we are removing activities
+                // from the executor's queue.
 
                 final StealStrategy tmp = s.isLocal() ? s.constellationStrategy : s.remoteStrategy;
 
                 // NOTE: a is allowed to be null
+                
+                /** TD: we try to steal from the wrapper */
                 a = wrapper.steal(s.context, tmp, s.isLocal(), s.size, s.source);
 
                 if (a != null) {
@@ -799,7 +933,10 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
             }
 
             if (a != null) {
-                if (!parent.handleStealReply(this, new StealReply(wrapper.identifier(), s.source, s.pool, s.context, a))) {
+                if (!parent.handleStealReply(this,
+                        new StealReply(wrapper.identifier(), s.source, s.pool, s.context, a))) {
+                    
+                    /** TD: we handle it inside reclaim() */
                     reclaim(a);
                 }
             } else if (!ignoreEmptyStealReplies) {
@@ -866,6 +1003,11 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         nextStealDeadline = 0;
     }
 
+    /**
+     * TD: This call all increases the total activity count of this instance
+     * 
+     * @param a
+     */
     public synchronized void deliverWrongContext(final ActivityRecord a) {
         // Timo: we should add it to the lookup as well
         lookup.put(a.identifier(), a);
@@ -881,6 +1023,14 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
                 logger.debug("Added job to wrongContext queue; length = " + wrongContext.size());
             }
         }
+        
+        if ( !terminationDetectionStarted )
+            terminationDetectionInitiate("  Termination Detection started by deliverWrongContext() @ " + identifier);
+        
+        /** TD: We add something in some queue */
+        this.activitiesInQueue.incrementAndGet();
+
+        System.out.println("  deliverWrongContext() " + this.activitiesInQueue);
     }
 
     private synchronized void waitForRequest() {
@@ -897,9 +1047,17 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
     }
 
     // An Activity.processActivities call ultimately ends up here.
-    // We should make progress on each call, either by processing requests, or by doing work.
+    // We should make progress on each call, either by processing requests, or
+    // by doing work.
     // Either that, or we should sleep for a while.
     public boolean processActivities() {
+        
+        synchronized(System.out) {
+            System.out.println("  processActivities(" + identifier +") " + "F: " + fresh.size() + " R: " 
+                    + restricted.size() + " S: " + stolen.size() + " W: " + wrongContext.size() + " RWC: " + restrictedWrongContext.size() + " REL: " + relocated.size() );
+            
+        }
+        
         boolean haveRequests = false;
         synchronized (this) {
             if (havePendingRequests) {
@@ -912,25 +1070,47 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         if (haveRequests) {
             processEvents();
         }
-        
-        boolean wrapperProcess = wrapper.process(); //try execute an activity
+
+        boolean wrapperProcess = false;
+
+        try {
+            /**TD: the very first time this will return false i guess */
+            wrapperProcess = wrapper.process(); // try execute an activity
+        } catch (TerminationDetectedException e) {
+            /**TD: if all goes well we have termination here (?) */
+            if (terminationDetectionStarted) {
+                
+                System.out.println("  wrapper.process() threw Termination exception! " + identifier);
+                
+                performTermination();
+            }
+                
+        }
+
         boolean pushWorkToExecutor = false;
-        
-        if(!wrapperProcess) {
-            pushWorkToExecutor = pushWorkToExecutor(wrapper.getLocalStealStrategy()); //try push something down
+
+        if (!wrapperProcess) {
+            
+            /** TD: Any activities that may be passed down are handled in the methods called by pushWorkToExecutor() */
+            pushWorkToExecutor = pushWorkToExecutor(wrapper.getLocalStealStrategy()); // try
+                                                                                      // push
+                                                                                      // something
+                                                                                      // down
         }
-        
-        if(pushWorkToExecutor) { //We push something down. We have to wait for termination from below!
-            this.waitBelow = true;
+
+        if (pushWorkToExecutor) { 
+            /** TD: We push something down so we have to wait for the wrapper */
+            terminationDetectionInitiate("  termination detection started (by processActivities() > pushWorkToExecutor) " + identifier);
         }
-        
+
         if (wrapperProcess || pushWorkToExecutor) {
             // Either we processed an activity, or we pushed one to the wrapper.
             return false;
         }
 
         if (parent == null || stealsFrom() == StealPool.NONE) {
-            // Cannot steal, either because there is no-one to steal from, or because of the NONE stealpool.
+            // Cannot steal, either because there is no-one to steal from, or
+            // because of the NONE stealpool.
             waitForRequest();
             return getDone();
         }
@@ -956,13 +1136,22 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
             if (logger.isTraceEnabled()) {
                 logger.trace("GENERATING STEAL REQUEST at " + identifier + " with context " + getContext());
             }
+            
+            /** TD: We immediately pass those to the wrapper so no need to subtract */
             final ActivityRecord[] result = parent.handleStealRequest(this, stealSize);
 
-            if (result != null) { //parent returned something
+            if (result != null) { // parent returned something
                 boolean more = false;
                 for (final ActivityRecord element : result) {
                     if (element != null) {
+                        
+                        
+                        terminationDetectionInitiate("  termination detection started by stealFromParent() @ " + identifier);
+                        
+                        
+                        /** TD: These come from our parent. Don't subtract from the count */
                         wrapper.addPrivateActivity(element);
+                        
                         more = true;
                     }
                 }
@@ -985,7 +1174,6 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
         final long start = System.currentTimeMillis();
 
         wrapper.runExecutor();
-        
 
         if (PRINT_STATISTICS) {
             printStatistics(System.currentTimeMillis() - start);
@@ -1069,39 +1257,145 @@ public class SingleThreadedConstellation extends Thread implements Terminateable
     public Profiling getProfiling() {
         return profiling;
     }
-    
-    
-    
-    
-    
+
     /** TERMINATION STUFF */
+
+    private boolean terminationDetectionStarted;
+
+    private AtomicInteger activitiesInQueue;
+
+    private boolean waitingWrapper;
     
-    private boolean waitBelow;
     
+    /**
+     * Initialize
+     * 
+     * @param msg
+     */
+    private void terminationDetectionInitialize(String msg) {
+        this.terminationDetectionStarted = false;
+        this.activitiesInQueue = new AtomicInteger(0);
+        this.waitingWrapper = false;
+        
+        if ( msg != null ) {
+            System.out.println(msg);
+        } else {
+            logger.warn("Initializing (worker) termination detection at " + identifier);
+        }
+    }
+    
+    
+    /**
+     * Start a termination detection procedure if not started already   <br/><br/>
+     * 
+     * Calling this method means that we are waiting for the wrapper    <br/>
+     * to announce and we cannot announce ourselves before this happens <br/><br/>
+     * 
+     * We could have that {@link #terminationDetectionStarted} == {@code true}   <br/>
+     * and {@link #waitingWrapper} == {@code false}. This means that the wrapper <br/>
+     * is empty but we still have stuff in our queues.                           <br/><br/>
+     * 
+     * Q: Can the above happen anyway?
+     * 
+     * @param msg
+     */
+    private void terminationDetectionInitiate(String msg) {
+        
+        if ( terminationDetectionStarted ) {
+            logger.warn("termination detection already started (" + identifier + ")");
+        } else {
+            this.terminationDetectionStarted = true;
+            
+        }
+
+        if ( waitingWrapper ) {
+            logger.warn("Already waiting wrapper!");
+        } else {
+            this.waitingWrapper = true;
+        }
+        
+        
+    }
+    
+    private void incActivities(int by) {
+        
+        /** somewhat expensive atomic update, make we have some change from it */
+        
+        if ( by != 0 ) {
+            this.activitiesInQueue.addAndGet(by);
+            
+            if ( !this.terminationDetectionStarted )
+                terminationDetectionStarted = true;
+        }
+
+    }
+    
+    private void decActivities(int by) {
+        
+        /** somewhat expensive atomic update, make we have some change from it */
+        
+        if ( by != 0 ) {
+            activitiesInQueue.addAndGet(-by);
+            
+            if ( terminationCheck() )
+                performTermination();
+        }
+    }
+    
+    private synchronized boolean terminationCheck() {
+        if ( !this.terminationDetectionStarted )
+            logger.warn("Attempt to check for termination before termination detection started" );
+        
+        if ( waitingWrapper ) return false;
+        
+        return activitiesInQueue.get() == 0;
+    }
+    
+
     @Override
     public void performTermination() {
-        //bla bla
-        
-        // TODO Auto-generated method stub
-        waitBelow = false;
-        announceTermination();
+        if (!terminationDetectionStarted) {
+            /* sanity check */
+            logger.warn("Attempt to performTermination() while termination detection is not started "); 
+        } else {
+            
+            /** 1. perform anything else required for termination of this worker here */
+            terminationDetectionStarted = false;
+            waitingWrapper = false;
+            
+            /** 2. announce the termination */
+            announceTermination();
+        }
     }
 
     @Override
-    public void announceTermination() {
+    public synchronized void announceTermination() {
         // TODO Auto-generated method stub
         System.out.println(this.identifier() + " announcing termination to parent " + parent.identifier());
         parent.informTerminated(this);
-        
+
     }
 
     @Override
     public void informTerminated(ExecutorWrapper t) {
-        if(t != this.wrapper) {
+        
+        Objects.requireNonNull(t);
+        
+        if (t != this.wrapper) {
+            /* sanity check */
             System.out.println("Invalid Wrapper for this SingleThreadedConstellation instance");
-        }else {
-            performTermination();
+        } else {
+            
+            this.waitingWrapper = false;
+            
+            if(terminationCheck())
+                announceTermination();
         }
     }
 
+
+    
+
+    
+    
 }

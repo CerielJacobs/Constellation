@@ -6,8 +6,9 @@ package ibis.constellation.impl.termination;
  * 
  * For example a MutliThreadedConstellation is a
  * Terminator AND a Terminateable.
- * A SingleThreadedConstellation is a Terminateable
+ * An ExecutorWrapper is a Terminateable
  * but NOT a Terminator
+ * 
  * @author gkarlos
  *
  * @param <T>
