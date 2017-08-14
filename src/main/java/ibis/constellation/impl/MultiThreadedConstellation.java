@@ -22,10 +22,9 @@ import ibis.constellation.Event;
 import ibis.constellation.NoSuitableExecutorException;
 import ibis.constellation.OrContext;
 import ibis.constellation.StealPool;
-import ibis.constellation.impl.util.Profiling;
-
 import ibis.constellation.impl.termination.Terminateable;
 import ibis.constellation.impl.termination.Terminator;
+import ibis.constellation.impl.util.Profiling;
 
 public class MultiThreadedConstellation implements Terminateable, Terminator<SingleThreadedConstellation> {
 
@@ -188,12 +187,12 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
     }
 
     private int next = 0;
-    
+
     /**
      * TD: The first time this method is called we initiate termination detection for this Constellation
-     * 
-     * Q: I guess submit is the only way to start doing work?
-     * 
+     *
+     * Q: I guess submit is the only way to start doing work? A: yes.
+     *
      * @param activity
      * @return
      * @throws NoSuitableExecutorException
@@ -207,19 +206,22 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
             SingleThreadedConstellation e = workers[index];
 
             if (ContextMatch.match(e.getContext(), activity.getContext())) {
-                
-                /** TD: Start termination detection if not started already. This check is needed because (i think) 
-                 *      it is possible to call submit multiple times from the application? */
-                if ( !terminationDetectionStarted ) 
+
+                /**
+                 * TD: Start termination detection if not started already. This check is needed because (i think) it is possible
+                 * to call submit multiple times from the application?
+                 */
+                if (!terminationDetectionStarted) {
                     terminationDetectionInitiate("Termination Detection started by performSubmit(1)");
-                
+                }
+
                 /** TD: We certainly pass something down so register an active worker */
                 activeWorker(e.identifier());
-                
+
                 return e.performSubmit(activity);
             }
         }
-        
+
         if (logger.isInfoEnabled()) {
             logger.info("No local executor for this activity (no identifier yet)");
         }
@@ -235,35 +237,42 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
             SingleThreadedConstellation e = workers[index];
 
             if (e.belongsTo().isWorld()) {
-                
-                /** TD: Start termination detection if not started already. This check is needed because (i think) 
-                 *      it is possible to call submit multiple times from the application? */
-                if ( !terminationDetectionStarted )
+
+                /**
+                 * TD: Start termination detection if not started already. This check is needed because (i think) it is possible
+                 * to call submit multiple times from the application?
+                 */
+                if (!terminationDetectionStarted) {
                     terminationDetectionInitiate("Termination Detection started by performSubmit(2)");
-                
+                }
+
                 /** TD: We certainly pass something down so register an active worker */
                 activeWorker(e.identifier());
-                
+
                 return e.performSubmit(activity);
             }
         }
 
-        // 
+        //
         int i = next++;
         next = next % workerCount;
-        
-        
-        /** Q: We pass something down no matter what? */
-        
-        /** TD: Start termination detection if not started already. This check is needed because (i think) 
-         *      it is possible to call submit multiple times from the application? */
-        if ( !terminationDetectionStarted ) 
+
+        /**
+         * Q: We pass something down no matter what? A: Yes. We cannot execute it ourselves, but maybe someone can steal it.
+         * Unusual case, though.
+         */
+
+        /**
+         * TD: Start termination detection if not started already. This check is needed because (i think) it is possible to call
+         * submit multiple times from the application?
+         */
+        if (!terminationDetectionStarted) {
             terminationDetectionInitiate("Termination Detection started by performSubmit(3)");
-        
-        
+        }
+
         /** TD: We certainly pass something down so register an active worker */
         activeWorker(workers[i].identifier());
-        
+
         return workers[i].performSubmit(activity);
 
     }
@@ -342,34 +351,33 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
             parent.handleApplicationMessage(m, true);
         }
     }
-    
-    
+
     /**
-     * Handle a steal reply from below                          <br/><br/>
-     * 
+     * Handle a steal reply from below <br/>
+     * <br/>
+     *
      * Called by a worker when replying to a steal request
-     * 
+     *
      * @param src
-     *      The owner of the reply
+     *            The owner of the reply
      * @param m
-     *      The steal reply. {@code m.target} is the worker this reply 
-     *      will be delivered to.
+     *            The steal reply. {@code m.target} is the worker this reply will be delivered to.
      * @return
-     */ 
+     */
     public boolean handleStealReply(SingleThreadedConstellation src, StealReply m) {
         SingleThreadedConstellation b = getWorker(m.target);
         if (b != null) {
-            
-            if ( !m.isEmpty() ) {
+
+            if (!m.isEmpty()) {
                 /** TD: The reply contains a number of activities */
                 activeWorker(b.identifier());
             }
-            
+
             b.deliverStealReply(m);
-            
-//            if(!m.isEmpty()) {
-//                this.activatedWorkers.put(b.identifier(), true);
-//            }
+
+            //            if(!m.isEmpty()) {
+            //                this.activatedWorkers.put(b.identifier(), true);
+            //            }
             return true;
         }
 
@@ -381,15 +389,15 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
         logger.error("Received steal reply for unknown target " + m.target + " (reclaiming work and dropping reply)");
         return false;
     }
-    
+
     /**
      * Handle a steal request from below.
-     * 
+     *
      * @param c
-     *      The source of the request
+     *            The source of the request
      * @param stealSize
-     *      The {@link ConstellationProperties#STEAL_SIZE} of the the requesting worker
-     *      
+     *            The {@link ConstellationProperties#STEAL_SIZE} of the the requesting worker
+     *
      * @return
      */
     public ActivityRecord[] handleStealRequest(final SingleThreadedConstellation c, final int stealSize) {
@@ -418,14 +426,15 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
                         localStealSize, true);
 
                 if (size > 0) {
-                    
+
                     /** TD: We pass *size activities down ? */
-                    
-                    if ( !terminationDetectionStarted )
+
+                    if (!terminationDetectionStarted) {
                         terminationDetectionInitiate("Termination Detection started by handleStealRequest()");
-                    
+                    }
+
                     //activeWorker(c.identifier());
-                    
+
                     return result;
                 }
             }
@@ -494,17 +503,16 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
     public ConstellationIdentifier identifier() {
         return identifier;
     }
-    
-    
+
     public boolean activate() {
-        
+
         synchronized (this) {
             if (active) {
                 return false;
             }
 
             active = true;
-            
+
             /** TD: initialize termination detection */
             terminationDetectionInitialize(null);
         }
@@ -518,11 +526,11 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
 
         return true;
     }
-    
-    
-    
+
     /**
-     * Q: What if this is called? Should we stop termination detection and announce? 
+     * Q: What if this is called? Should we stop termination detection and announce? A: No, if your termination detection algo is
+     * running, I would like to see this more as a promise that the main program calling this will no longer submit jobs on this
+     * constellation. And, it should block until termination.
      */
     public void done() {
 
@@ -539,23 +547,23 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
             profiling.printProfile(PROFILE_OUTPUT);
         }
     }
-    
+
     /**
      * Handle a steal request from above
-     * 
-     * TD: This will be relevant to distributed term. detection 
-     * 
+     *
+     * TD: This will be relevant to distributed term. detection
+     *
      * @param sr
      */
     public void deliverStealRequest(StealRequest sr) {
         // steal request delivered by our parent.
-        
+
         if (logger.isDebugEnabled()) {
             logger.debug("M REMOTE STEAL REQUEST from child " + sr.source + " context " + sr.context + " pool " + sr.pool);
         }
 
         final int rnd = selectRandomWorker();
-        
+
         // Did the parent receive the StealReply correctly ?
         //boolean somethingWentWrong = false;
 
@@ -572,7 +580,7 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
                 if (logger.isDebugEnabled()) {
                     logger.debug("Found steal target: " + tmp.identifier() + ", pool = " + p);
                 }
-                
+
                 ActivityRecord[] result = tmp.attemptSteal(sr.context, sr.remoteStrategy, sr.pool, sr.source, sr.size, false);
 
                 if (result != null) {
@@ -581,7 +589,7 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
                     }
                     // We've managed to find some work!
                     if (!parent.handleStealReply(new StealReply(identifier, sr.source, sr.pool, sr.context, result))) {
-                        
+
                         tmp.reclaim(result);
                     }
 
@@ -615,12 +623,11 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
     }
 
     /**
-     * Handle a steal reply from above and pass it down to
-     * the worker
-     * 
-     * 
-     * TD: This will be relevant to distributed term. detection 
-     * 
+     * Handle a steal reply from above and pass it down to the worker
+     *
+     *
+     * TD: This will be relevant to distributed term. detection
+     *
      * @param sr
      */
     public void deliverStealReply(StealReply sr) {
@@ -682,53 +689,49 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
         return facade;
     }
 
-
-    
-    
-    
     /** ΤΕΡΜΙΝΑΤΙΟΝ STUFF BELOW */
 
     private boolean terminationDetectionStarted;
-    
-    private AtomicInteger activeWorkerCount; 
-    
+
+    private AtomicInteger activeWorkerCount;
+
     private ConcurrentHashMap<ConstellationIdentifierImpl, Boolean> activatedWorkers;
-    
+
     /**
-     * 
+     *
      * To be called only once to initialize termination detection stuff
-     * 
+     *
      * @param msg
      */
     private void terminationDetectionInitialize(String msg) {
-        
+
         if (this.terminationDetectionStarted) {
             /* sanity check */
             logger.warn("terminationDetectionInit() called while termination detection is active " + identifier);
-            
+
         } else {
-            
-            if ( msg != null ) {
+
+            if (msg != null) {
                 System.out.println("\n" + msg + "\n");
             } else {
                 logger.warn("Initializing (local) termination detection at " + identifier);
             }
 
             this.activeWorkerCount = new AtomicInteger(0);
-            
+
             this.activatedWorkers = new ConcurrentHashMap<ConstellationIdentifierImpl, Boolean>();
-            
-            for ( int i = 0; i < this.workers.length; i++ )
-                this.activatedWorkers.put(workers[i].identifier(), false);
-        }     
+
+            for (SingleThreadedConstellation worker : this.workers) {
+                this.activatedWorkers.put(worker.identifier(), false);
+            }
+        }
     }
-    
+
     /**
-     * Called to initiate a "local" termination detection process for
-     * this MultiThreadedConsellation  <br/>
+     * Called to initiate a "local" termination detection process for this MultiThreadedConsellation <br/>
      */
     private void terminationDetectionInitiate(String msg) {
-        if ( this.terminationDetectionStarted ) {
+        if (this.terminationDetectionStarted) {
             /* sanity check */
             logger.warn("Termination Detection already started!");
         } else if (this.activeWorkerCount.get() != 0) {
@@ -740,86 +743,89 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
         } else {
             /* ok */
             this.terminationDetectionStarted = true;
-            
-            if ( msg != null)
+
+            if (msg != null) {
                 System.out.println(msg);
+            }
         }
     }
-    
+
     /**
-     * TD: Called when we pass something down.                           <br/><br/>
-     * 
-     * If the worker was passive, we update its entry in                      <br/>
-     * {@link #activatedWorkers} and increase {@link #activeWorkerCount}.<br/><br/>
-     * 
-     * If the worker was already active we do nothing                    <br/><br/>
-     * 
+     * TD: Called when we pass something down. <br/>
+     * <br/>
+     *
+     * If the worker was passive, we update its entry in <br/>
+     * {@link #activatedWorkers} and increase {@link #activeWorkerCount}.<br/>
+     * <br/>
+     *
+     * If the worker was already active we do nothing <br/>
+     * <br/>
+     *
      */
     public synchronized void activeWorker(ConstellationIdentifierImpl worker) {
-        
+
         Objects.requireNonNull(worker);
-        
+
         if (!terminationDetectionStarted) {
             /* sanity check */
             logger.info("Attempt to register active worker before Termination Detection started");
         } else {
-            if ( !this.activatedWorkers.put(worker, true) ) {
-                
+            if (!this.activatedWorkers.put(worker, true)) {
+
                 System.out.println("worker " + worker + " ACTIVE");
-                
+
                 this.activeWorkerCount.incrementAndGet();
-                
+
             } else {
                 /* the worker was already active. That's ok though */
             }
         }
-        
 
-           
     }
-    
+
     /**
-     * TD: Register a worker becoming passive                           <br/><br/>
-     * 
-     * Called by {@link #informTerminated(SingleThreadedConstellation)} when a worker
-     * let's us know is passive     <br/><br/>
-     * 
+     * TD: Register a worker becoming passive <br/>
+     * <br/>
+     *
+     * Called by {@link #informTerminated(SingleThreadedConstellation)} when a worker let's us know is passive <br/>
+     * <br/>
+     *
      * @param worker
      */
     private void passiveWorker(ConstellationIdentifierImpl worker) {
-        if ( !this.activatedWorkers.put(worker, false) )
+        if (!this.activatedWorkers.put(worker, false)) {
             logger.warn("Worker passive already");
-        else {
+        } else {
             this.activeWorkerCount.decrementAndGet();
             logger.info(this.identifier + " learnt " + worker + " passive");
         }
-            
+
     }
-    
+
     /**
      * TD: Check for termination
-     * 
+     *
      * @return {@code true} - Termination detected. All queues below are empty
-     * 
+     *
      */
     private synchronized boolean terminationCheck() {
-        System.out.println("Termination Check @ " + this.identifier + ": " + terminationDetectionStarted + " " + this.activeWorkerCount.get() + " " + this.activatedWorkers.values());
+        System.out.println("Termination Check @ " + this.identifier + ": " + terminationDetectionStarted + " "
+                + this.activeWorkerCount.get() + " " + this.activatedWorkers.values());
         return this.terminationDetectionStarted && this.activeWorkerCount.get() == 0
                 && !this.activatedWorkers.values().contains(true);
     }
 
-    
     @Override
     public void performTermination() {
-        
+
         if (!terminationDetectionStarted) {
             /* sanity check */
-            logger.warn("Attempt to performTermination() while termination detection is not started "); 
+            logger.warn("Attempt to performTermination() while termination detection is not started ");
         } else {
-            
+
             /** 1. perform anything else required for termination of this constellation here */
             terminationDetectionStarted = false;
-            
+
             /** 2. announce the termination */
             announceTermination();
         }
@@ -827,29 +833,28 @@ public class MultiThreadedConstellation implements Terminateable, Terminator<Sin
 
     @Override
     public synchronized void informTerminated(SingleThreadedConstellation t) {
-        
+
         Objects.requireNonNull(t);
-        
+
         passiveWorker(t.identifier());
-        
-        /** TD: Every time something becomes passive we check for termination  */
-        if ( terminationCheck() ) {
-            
+
+        /** TD: Every time something becomes passive we check for termination */
+        if (terminationCheck()) {
+
             performTermination();
-            
+
         } else {
-            
+
         }
-                   
+
     }
 
     @Override
     public void announceTermination() {
-        
+
         /** for now just print something */
         System.out.println("TERMINATION");
         System.exit(1);
     }
-    
-    
+
 }
